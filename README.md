@@ -1,17 +1,7 @@
-# Bucket Token - ERC-20 Smart Contract
+# Contracts for the bucket for eggs project
 
-A production-ready ERC-20 token implementation built with Foundry and OpenZeppelin contracts. Features minting, burning, pausing, and gasless approvals (EIP-2612).
-
-## Features
-
-- ✅ **ERC-20 Standard**: Full compliance with ERC-20 token standard
-- 🔥 **Burnable**: Token holders can burn their tokens
-- ⏸️ **Pausable**: Owner can pause/unpause transfers in emergencies
-- 👤 **Ownable**: Access control for privileged operations
-- ⛽ **Permit (EIP-2612)**: Gasless approvals using signatures
-- 🎯 **Max Supply Cap**: Optional maximum supply limit (1 billion tokens)
-- ✨ **Gas Optimized**: Built with latest Solidity and optimization enabled
-- 🧪 **Thoroughly Tested**: 25+ tests with >95% coverage
+This repository keeps the list of smart contracts used in the bucket for eggs platform.
+All contracts are built with Foundry and OpenZeppelin contracts.
 
 ## Prerequisites
 
@@ -22,7 +12,7 @@ A production-ready ERC-20 token implementation built with Foundry and OpenZeppel
 
 1. Clone the repository:
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/zx2486/bucket-for-eggs-smart-contracts.git
 cd bucket-for-eggs-smart-contracts
 ```
 
@@ -73,7 +63,33 @@ Generate coverage report:
 forge coverage
 ```
 
-## Deployment
+## Contract Descriptions
+This section discusses the contracts in this repository and where they are used in the platform.
+
+### BucketToken.sol
+This is the base and core contract of the bucket for eggs platform. It is based on ERC-20 with mint, burn, pause, ownable and gas less approval (EIP-2612) features.
+
+This contract gives the very basic feature of the platform: 
+A pool contract for others to suppport an user / project and get back a token. The token can be used to claim back something from the same contract if there is sufficient balance. 
+
+User can send in coins or tokens on the whitelist and get newly minted tokens (deposit()).
+User with tokens can burn the token and get back some coins or tokens (withdraw()).
+What a unit of token can get is calculated by a pre-defined function (tokenBalance()) and it is updated whenever deposit() or rebalance() is called.
+Contract owner can take away coins / tokens for their own good (ownerWithdraw()), deposit and give newly minted tokens to another address (assistDeposit()) and clean tokens in the contract which is not whitelisted (cleanDusts()).
+
+New users setting up a pay for nothing contract is actually a proxy contract pointing to this contract.
+
+### BucketMembership.sol
+This is another base contract. It is based on ERC-721 with mint, burn, pause, ownable and gas less approval (EIP-2612) features.
+
+This contract is more or less the same as BucketToken.sol. But the return is a NFT representing a membership with grades. Withdraw will get back coin / token based on the remaining validity period of the membership.
+There is also a simple function (checkMembership()) to check if an user has a valid membership of a certain grade.
+
+### BucketInfo.sol
+This contract keeps information neccessary for other contracts.
+This includes the whitelist of coins / tokens, whether the whole platform should be paused, prices of each coins or tokens. Price feed will go to this contract (likely by chainlink).
+
+## Deployment (Bucket Token Contract)
 
 ### Local Deployment (Anvil)
 
@@ -108,7 +124,8 @@ You'll be prompted to confirm before deployment.
 
 ## Manual Deployment
 
-You can also deploy manually using Forge:
+You can also deploy manually using Forge. This is also the recommanded way to deploy a single contract.
+The following is an example for deploying Bucket Token contract
 
 ```bash
 forge script script/DeployBucketToken.s.sol \
@@ -158,50 +175,6 @@ Pause contract (owner only):
 cast send <CONTRACT_ADDRESS> "pause()" --rpc-url $SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
 ```
 
-## Project Structure
-
-```
-bucket-for-eggs-smart-contracts/
-├── src/
-│   └── BucketToken.sol          # Main ERC-20 token contract
-├── test/
-│   └── BucketToken.t.sol        # Comprehensive test suite
-├── script/
-│   ├── DeployBucketToken.s.sol  # Deployment script
-│   ├── deploy-local.sh          # Local deployment helper
-│   ├── deploy-sepolia.sh        # Sepolia deployment helper
-│   └── deploy-mainnet.sh        # Mainnet deployment helper
-├── lib/
-│   ├── forge-std/               # Foundry standard library
-│   └── openzeppelin-contracts/  # OpenZeppelin contracts
-├── foundry.toml                 # Foundry configuration
-├── .env.example                 # Environment variables template
-└── README.md                    # This file
-```
-
-## Contract Details
-
-### BucketToken.sol
-
-**Name**: Bucket Token  
-**Symbol**: BUCKET  
-**Decimals**: 18  
-**Max Supply**: 1,000,000,000 tokens (1 billion)
-
-### Main Functions
-
-| Function | Access | Description |
-|----------|--------|-------------|
-| `transfer(address to, uint256 amount)` | Public | Transfer tokens |
-| `approve(address spender, uint256 amount)` | Public | Approve spending |
-| `transferFrom(address from, address to, uint256 amount)` | Public | Transfer from approved address |
-| `mint(address to, uint256 amount)` | Owner | Mint new tokens |
-| `burn(uint256 amount)` | Public | Burn own tokens |
-| `burnFrom(address account, uint256 amount)` | Public | Burn approved tokens |
-| `pause()` | Owner | Pause all transfers |
-| `unpause()` | Owner | Unpause transfers |
-| `permit(...)` | Public | Approve via signature (EIP-2612) |
-
 ## Gas Optimization
 
 The contract is optimized with:
@@ -221,23 +194,6 @@ The contract is optimized with:
 - Consider professional audit for production use
 - Use multi-sig wallet for contract ownership
 - Monitor contract events for unusual activity
-
-## Common Use Cases
-
-### Token Sale / ICO
-1. Deploy with initial supply to treasury
-2. Transfer tokens to sale contract
-3. Distribute to buyers
-
-### Governance Token
-1. Deploy with initial supply
-2. Distribute to stakeholders
-3. Integrate with governance contracts
-
-### Utility Token
-1. Deploy with zero initial supply
-2. Mint tokens as needed
-3. Users burn tokens for utility
 
 ## Troubleshooting
 
@@ -307,8 +263,3 @@ cast --help
 ## License
 
 This project is licensed under the MIT License.
-
----
-
-**Made with ❤️ using Foundry and OpenZeppelin**
-
