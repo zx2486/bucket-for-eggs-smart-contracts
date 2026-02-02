@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.33;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title BucketInfo
@@ -29,17 +30,20 @@ contract BucketInfo is Ownable, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     /// @dev Mapping of token address to whitelist status
-    mapping(address => bool) public isWhitelisted;
+    mapping(address => bool) private isWhitelisted;
 
     /// @dev Mapping of token address to price (in USD with 8 decimals, like Chainlink)
     /// Price represents USD per 1 token (e.g., 1 ETH = 2000.00000000 USD)
-    mapping(address => uint256) public tokenPrices;
+    mapping(address => uint256) private tokenPrices;
+
+    /// @dev Mapping of token address to last price update timestamp
+    mapping(address => uint256) private priceUpdateTimestamps;
 
     /// @dev Mapping of token address to Chainlink price feed address
-    mapping(address => address) public priceFeedsChainlink;
+    mapping(address => address) private priceFeedsChainlink;
 
     /// @dev List of all whitelisted tokens for enumeration
-    address[] public whitelistedTokens;
+    address[] private whitelistedTokens;
 
     /// @dev Platform fee in basis points (100 = 1%)
     uint256 public platformFee;
@@ -170,6 +174,7 @@ contract BucketInfo is Ownable, Pausable {
         require(price > 0, "Price must be greater than 0");
 
         tokenPrices[token] = price;
+        priceUpdateTimestamps[token] = block.timestamp;
         emit PriceUpdated(token, price);
     }
 
@@ -189,6 +194,7 @@ contract BucketInfo is Ownable, Pausable {
             require(prices[i] > 0, "Price must be greater than 0");
 
             tokenPrices[tokens[i]] = prices[i];
+            priceUpdateTimestamps[token] = block.timestamp;
             emit PriceUpdated(tokens[i], prices[i]);
         }
     }
@@ -213,6 +219,27 @@ contract BucketInfo is Ownable, Pausable {
      */
     function getTokenPrice(address token) external view returns (uint256) {
         require(isWhitelisted[token], "Token not whitelisted");
+        if (priceFeedsChainlink[token] != address(0)) {
+            AggregatorV3Interface priceFeed = AggregatorV3Interface(
+                priceFeedsChainlink[token]
+            );
+            (, int256 price, , , ) = priceFeed.latestRoundData();
+            uint8 decimals = priceFeed.decimals();
+            // Adjust price to have 8 decimals
+            if (decimals < PRICE_DECIMALS) {
+                return uint256(price) * (10 ** (PRICE_DECIMALS - decimals));
+            } else if (decimals > PRICE_DECIMALS) {
+                return uint256(price) / (10 ** (decimals - PRICE_DECIMALS));
+            } else {
+                return uint256(price);
+            }
+        }
+        // Check if manual price is stale (older than 30 days)
+        require(
+            priceUpdateTimestamps[token] > 0 &&
+                block.timestamp - priceUpdateTimestamps[token] <= 30 days,
+            "Price is outdated"
+        );
         return tokenPrices[token];
     }
 
