@@ -145,7 +145,7 @@ Manual verification:
 forge verify-contract \
     --chain-id 11155111 \
     --num-of-optimizations 200 \
-    --compiler-version v0.8.28 \
+    --compiler-version v0.8.33 \
     <CONTRACT_ADDRESS> \
     src/BucketToken.sol:BucketToken \
     --etherscan-api-key $ETHERSCAN_API_KEY
@@ -178,7 +178,7 @@ cast send <CONTRACT_ADDRESS> "pause()" --rpc-url $SEPOLIA_RPC_URL --private-key 
 ## Gas Optimization
 
 The contract is optimized with:
-- Solidity 0.8.28 with optimizer enabled (200 runs)
+- Solidity 0.8.33 with optimizer enabled (200 runs)
 - Cancun EVM version for latest opcodes
 - OpenZeppelin's battle-tested implementations
 

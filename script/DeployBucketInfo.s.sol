@@ -1,46 +1,84 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.33;
 
-import "forge-std/Script.sol";
-import "../src/BucketInfo.sol";
+import {Script} from "forge-std/Script.sol";
+import {console} from "forge-std/console.sol";
+import {BucketInfo} from "../src/BucketInfo.sol";
 
 /**
  * @title DeployBucketInfo
- * @dev Script to deploy BucketInfo contract
- *
- * Usage:
- * - Local deployment (Anvil): forge script script/DeployBucketInfo.s.sol --rpc-url localhost --broadcast
- * - Testnet: forge script script/DeployBucketInfo.s.sol --rpc-url sepolia --broadcast --verify
- * - Mainnet: forge script script/DeployBucketInfo.s.sol --rpc-url mainnet --broadcast --verify
+ * @notice Deployment script for BucketInfo contract with network-specific configurations
+ * @dev Reads token and price feed configurations from JSON files based on network
  */
 contract DeployBucketInfo is Script {
-    function run() external returns (BucketInfo) {
-        // Get deployer address from private key
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
+    /// @dev Network configuration structure
+    struct TokenConfig {
+        address tokenAddress;
+        address priceFeed;
+        string name;
+    }
 
-        console.log("Deploying BucketInfo...");
-        console.log("Deployer:", deployer);
+    struct NetworkConfig {
+        uint256 platformFee;
+        TokenConfig[] tokens;
+    }
+
+    /**
+     * @notice Main deployment function
+     * @dev Reads configuration from JSON based on NETWORK environment variable
+     */
+    function run() external {
+        // Read environment variables
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        string memory network = vm.envOr("NETWORK", string("sepolia"));
+
+        // Load network configuration
+        string memory configPath = string.concat("config/", network, ".json");
+        string memory json = vm.readFile(configPath);
+
+        console.log("=== BucketInfo Deployment ===");
+        console.log("Network:", network);
+        console.log("Config file:", configPath);
+        console.log("");
+
+        // Parse configuration
+        uint256 platformFee = vm.parseJsonUint(json, ".platformFee");
+        bytes memory tokensData = vm.parseJson(json, ".tokens");
+        TokenConfig[] memory tokens = abi.decode(tokensData, (TokenConfig[]));
+
+        console.log("Platform Fee:", platformFee, "basis points");
+        console.log("Tokens to configure:", tokens.length);
+        console.log("");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy the contract
+        // Deploy BucketInfo contract
         BucketInfo bucketInfo = new BucketInfo();
+        console.log("BucketInfo deployed at:", address(bucketInfo));
+        console.log("");
 
+        // Set platform fee
+        bucketInfo.setPlatformFee(platformFee);
+        console.log("Platform fee set to:", platformFee, "basis points");
+        console.log("");
+
+        // Configure tokens
+        console.log("Configuring tokens and price feeds...");
+        bucketInfo.batchSetTokenWhitelist(tokens.map(t => t.tokenAddress), true);
+        bucketInfo.batchSetPriceFeeds(tokens.map(t => t.tokenAddress), tokens.map(t => t.priceFeed));
+        
         vm.stopBroadcast();
 
-        console.log("BucketInfo deployed at:", address(bucketInfo));
+        // Deployment summary
+        console.log("=== Deployment Summary ===");
+        console.log("BucketInfo Address:", address(bucketInfo));
         console.log("Owner:", bucketInfo.owner());
         console.log("Platform Fee:", bucketInfo.platformFee(), "basis points");
         console.log(
-            "Whitelisted Tokens Count:",
+            "Whitelisted Tokens:",
             bucketInfo.getWhitelistedTokenCount()
         );
-        console.log(
-            "Platform Operational:",
-            bucketInfo.isPlatformOperational()
-        );
-
-        return bucketInfo;
+        console.log("");
+        console.log("Deployment complete!");
     }
 }

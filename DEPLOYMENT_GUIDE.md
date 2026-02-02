@@ -131,7 +131,7 @@ Deployment Date: ...
 forge verify-contract \
     --chain-id 11155111 \
     --num-of-optimizations 200 \
-    --compiler-version v0.8.28 \
+    --compiler-version v0.8.33 \
     <CONTRACT_ADDRESS> \
     src/BucketToken.sol:BucketToken \
     --etherscan-api-key $ETHERSCAN_API_KEY \

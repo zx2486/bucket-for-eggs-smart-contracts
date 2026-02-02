@@ -212,6 +212,21 @@ contract BucketInfo is Ownable, Pausable {
         emit PriceFeedUpdated(token, priceFeed);
     }
 
+    function batchSetPriceFeeds(
+        address[] calldata tokens,
+        address[] calldata priceFeeds
+    ) external onlyOwner {
+        require(tokens.length == priceFeeds.length, "Arrays length mismatch");
+
+        for (uint256 i = 0; i < tokens.length; i++) {
+            require(isWhitelisted[tokens[i]], "Token not whitelisted");
+            require(priceFeeds[i] != address(0), "Invalid price feed address");
+
+            priceFeedsChainlink[tokens[i]] = priceFeeds[i];
+            emit PriceFeedUpdated(tokens[i], priceFeeds[i]);
+        }
+    }
+
     /**
      * @dev Get token price (USD with 8 decimals)
      * @param token Address of the token

@@ -284,5 +284,5 @@ For issues or questions:
 ---
 
 **Contract Version**: 1.0.0  
-**Solidity Version**: ^0.8.28  
+**Solidity Version**: ^0.8.33
 **License**: MIT
