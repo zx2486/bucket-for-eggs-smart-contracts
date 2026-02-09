@@ -40,12 +40,12 @@ contract BucketInfoTest is Test {
         assertEq(bucketInfo.MAX_PLATFORM_FEE(), 1000);
 
         // Native token should be whitelisted by default
-        assertTrue(bucketInfo.isWhitelisted(address(0)));
+        assertTrue(bucketInfo.isTokenWhitelisted(address(0)));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 1);
     }
 
     function test_NativeTokenWhitelistedByDefault() public view {
-        assertTrue(bucketInfo.isWhitelisted(bucketInfo.NATIVE_TOKEN()));
+        assertTrue(bucketInfo.isTokenWhitelisted(bucketInfo.NATIVE_TOKEN()));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -58,20 +58,20 @@ contract BucketInfoTest is Test {
 
         bucketInfo.setTokenWhitelist(tokenA, true);
 
-        assertTrue(bucketInfo.isWhitelisted(tokenA));
+        assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 2); // Native + tokenA
     }
 
     function test_RemoveTokenFromWhitelist() public {
         bucketInfo.setTokenWhitelist(tokenA, true);
-        assertTrue(bucketInfo.isWhitelisted(tokenA));
+        assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
 
         vm.expectEmit(true, false, false, true);
         emit TokenWhitelisted(tokenA, false);
 
         bucketInfo.setTokenWhitelist(tokenA, false);
 
-        assertFalse(bucketInfo.isWhitelisted(tokenA));
+        assertFalse(bucketInfo.isTokenWhitelisted(tokenA));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 1); // Only native
     }
 
@@ -101,9 +101,9 @@ contract BucketInfoTest is Test {
 
         bucketInfo.batchSetTokenWhitelist(tokens, true);
 
-        assertTrue(bucketInfo.isWhitelisted(tokenA));
-        assertTrue(bucketInfo.isWhitelisted(tokenB));
-        assertTrue(bucketInfo.isWhitelisted(user1));
+        assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
+        assertTrue(bucketInfo.isTokenWhitelisted(tokenB));
+        assertTrue(bucketInfo.isTokenWhitelisted(user1));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 4); // Native + 3 tokens
     }
 
@@ -117,8 +117,8 @@ contract BucketInfoTest is Test {
 
         bucketInfo.batchSetTokenWhitelist(tokens, false);
 
-        assertFalse(bucketInfo.isWhitelisted(tokenA));
-        assertFalse(bucketInfo.isWhitelisted(tokenB));
+        assertFalse(bucketInfo.isTokenWhitelisted(tokenA));
+        assertFalse(bucketInfo.isTokenWhitelisted(tokenB));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 1); // Only native
     }
 
@@ -150,7 +150,6 @@ contract BucketInfoTest is Test {
 
         bucketInfo.setTokenPrice(tokenA, price);
 
-        assertEq(bucketInfo.tokenPrices(tokenA), price);
         assertEq(bucketInfo.getTokenPrice(tokenA), price);
     }
 
@@ -215,7 +214,6 @@ contract BucketInfoTest is Test {
 
         bucketInfo.setPriceFeed(tokenA, priceFeed);
 
-        assertEq(bucketInfo.priceFeedsChainlink(tokenA), priceFeed);
         assertEq(bucketInfo.getPriceFeed(tokenA), priceFeed);
     }
 

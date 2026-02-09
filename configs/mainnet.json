@@ -100,6 +100,11 @@
             "address": "0xe41d2489571d322189246dafa5ebde1f4699f498",
             "priceFeed": "0x2885d15b8Af22648b98B122b22FDF4D2a56c6023",
             "name": "ZRX"
+        },
+        {
+            "address": "0x111111111117dC0aa78b770fA6A738034120C302",
+            "priceFeed": "0xc929ad75B72593967DE83E7F7Cda0493458261D9",
+            "name": "1INCH"
         }
     ]
 }

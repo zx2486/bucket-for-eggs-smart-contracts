@@ -3,7 +3,7 @@ pragma solidity ^0.8.33;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title BucketInfo
@@ -194,7 +194,7 @@ contract BucketInfo is Ownable, Pausable {
             require(prices[i] > 0, "Price must be greater than 0");
 
             tokenPrices[tokens[i]] = prices[i];
-            priceUpdateTimestamps[token] = block.timestamp;
+            priceUpdateTimestamps[tokens[i]] = block.timestamp;
             emit PriceUpdated(tokens[i], prices[i]);
         }
     }
@@ -265,6 +265,26 @@ contract BucketInfo is Ownable, Pausable {
      */
     function getPriceFeed(address token) external view returns (address) {
         return priceFeedsChainlink[token];
+    }
+
+    /**
+     * @dev Check if a token is whitelisted
+     * @param token Address of the token
+     * @return True if token is whitelisted
+     */
+    function isTokenWhitelisted(address token) external view returns (bool) {
+        return isWhitelisted[token];
+    }
+
+    /**
+     * @dev Get manually set token price (USD with 8 decimals)
+     * @param token Address of the token
+     * @return price Manually set token price (0 if not set or using Chainlink)
+     */
+    function getManualTokenPrice(
+        address token
+    ) external view returns (uint256) {
+        return tokenPrices[token];
     }
 
     /*//////////////////////////////////////////////////////////////

@@ -64,9 +64,16 @@ contract DeployBucketInfo is Script {
 
         // Configure tokens
         console.log("Configuring tokens and price feeds...");
-        bucketInfo.batchSetTokenWhitelist(tokens.map(t => t.tokenAddress), true);
-        bucketInfo.batchSetPriceFeeds(tokens.map(t => t.tokenAddress), tokens.map(t => t.priceFeed));
-        
+        // Build arrays of token addresses and price feeds from the TokenConfig memory array
+        address[] memory tokenAddresses = new address[](tokens.length);
+        address[] memory priceFeeds = new address[](tokens.length);
+        for (uint256 i = 0; i < tokens.length; i++) {
+            tokenAddresses[i] = tokens[i].tokenAddress;
+            priceFeeds[i] = tokens[i].priceFeed;
+        }
+        bucketInfo.batchSetTokenWhitelist(tokenAddresses, true);
+        bucketInfo.batchSetPriceFeeds(tokenAddresses, priceFeeds);
+
         vm.stopBroadcast();
 
         // Deployment summary

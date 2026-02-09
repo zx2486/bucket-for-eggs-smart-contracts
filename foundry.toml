@@ -14,7 +14,8 @@ evm_version = "cancun"
 # Remappings
 remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/",
-    "forge-std/=lib/forge-std/src/"
+    "forge-std/=lib/forge-std/src/",
+    "@chainlink/=lib/chainlink-brownie-contracts/contracts/src/v0.8/"
 ]
 
 # Testing configuration
