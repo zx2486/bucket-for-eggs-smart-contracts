@@ -94,9 +94,7 @@ contract BasicSwap is Ownable, ReentrancyGuard {
      * @return usdtSwapped Amount of USDT swapped
      * @return ethReceived Amount of ETH received
      */
-    function swap(
-        bytes calldata swapCalldata
-    )
+    function swap(bytes calldata swapCalldata)
         external
         onlyOwner
         nonReentrant
@@ -116,7 +114,7 @@ contract BasicSwap is Ownable, ReentrancyGuard {
         uint256 ethBalanceBefore = address(this).balance;
 
         // Execute swap via 1inch router
-        (bool success, ) = oneInchRouter.call(swapCalldata);
+        (bool success,) = oneInchRouter.call(swapCalldata);
         require(success, "1inch swap failed");
 
         // Calculate ETH received
@@ -150,10 +148,7 @@ contract BasicSwap is Ownable, ReentrancyGuard {
      * @param recipient Address to receive USDT
      * @param amount Amount of USDT to withdraw
      */
-    function withdrawUSDT(
-        address recipient,
-        uint256 amount
-    ) external onlyOwner nonReentrant {
+    function withdrawUSDT(address recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "Invalid recipient");
         require(amount > 0, "Amount must be greater than 0");
 
@@ -169,15 +164,12 @@ contract BasicSwap is Ownable, ReentrancyGuard {
      * @param recipient Address to receive ETH
      * @param amount Amount of ETH to withdraw
      */
-    function withdrawETH(
-        address payable recipient,
-        uint256 amount
-    ) external onlyOwner nonReentrant {
+    function withdrawETH(address payable recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "Invalid recipient");
         require(amount > 0, "Amount must be greater than 0");
         require(address(this).balance >= amount, "Insufficient ETH balance");
 
-        (bool success, ) = recipient.call{value: amount}("");
+        (bool success,) = recipient.call{value: amount}("");
         require(success, "ETH transfer failed");
 
         emit ETHWithdrawn(recipient, amount);

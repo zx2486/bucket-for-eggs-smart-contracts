@@ -17,13 +17,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
  * - Pausable: Owner can pause all token transfers
  * - Permit: EIP-2612 gasless approvals
  */
-contract BucketToken is
-    ERC20,
-    ERC20Burnable,
-    ERC20Pausable,
-    Ownable,
-    ERC20Permit
-{
+contract BucketToken is ERC20, ERC20Burnable, ERC20Pausable, Ownable, ERC20Permit {
     /// @dev Maximum supply cap (optional - remove if unlimited supply is desired)
     uint256 public constant MAX_SUPPLY = 1_000_000_000 * 10 ** 18; // 1 billion tokens
 
@@ -32,18 +26,12 @@ contract BucketToken is
      * @param initialOwner Address that will own the contract
      * @param initialSupply Initial supply to mint
      */
-    constructor(
-        address initialOwner,
-        uint256 initialSupply
-    )
+    constructor(address initialOwner, uint256 initialSupply)
         ERC20("Bucket Token", "BUCKET")
         Ownable(initialOwner)
         ERC20Permit("Bucket Token")
     {
-        require(
-            initialSupply <= MAX_SUPPLY,
-            "Initial supply exceeds max supply"
-        );
+        require(initialSupply <= MAX_SUPPLY, "Initial supply exceeds max supply");
         _mint(initialOwner, initialSupply);
     }
 
@@ -53,10 +41,7 @@ contract BucketToken is
      * @param amount Amount of tokens to mint
      */
     function mint(address to, uint256 amount) public onlyOwner {
-        require(
-            totalSupply() + amount <= MAX_SUPPLY,
-            "Minting would exceed max supply"
-        );
+        require(totalSupply() + amount <= MAX_SUPPLY, "Minting would exceed max supply");
         _mint(to, amount);
     }
 
@@ -80,11 +65,7 @@ contract BucketToken is
      * @param to Address tokens are transferred to
      * @param value Amount of tokens transferred
      */
-    function _update(
-        address from,
-        address to,
-        uint256 value
-    ) internal override(ERC20, ERC20Pausable) {
+    function _update(address from, address to, uint256 value) internal override(ERC20, ERC20Pausable) {
         super._update(from, to, value);
     }
 }

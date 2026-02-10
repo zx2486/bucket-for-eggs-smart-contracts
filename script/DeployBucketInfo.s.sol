@@ -33,7 +33,7 @@ contract DeployBucketInfo is Script {
         string memory network = vm.envOr("NETWORK", string("sepolia"));
 
         // Load network configuration
-        string memory configPath = string.concat("config/", network, ".json");
+        string memory configPath = string.concat("./configs/", network, ".json");
         string memory json = vm.readFile(configPath);
 
         console.log("=== BucketInfo Deployment ===");
@@ -43,11 +43,15 @@ contract DeployBucketInfo is Script {
 
         // Parse configuration
         uint256 platformFee = vm.parseJsonUint(json, ".platformFee");
-        bytes memory tokensData = vm.parseJson(json, ".tokens");
-        TokenConfig[] memory tokens = abi.decode(tokensData, (TokenConfig[]));
+        // bytes memory tokensData = vm.parseJson(json, ".tokens");
+        // TokenConfig[] memory tokens = abi.decode(tokensData, (TokenConfig[]));
+        // Parse tokens array - get each element individually
+        uint256 tokenCount = vm.parseJsonKeys(json, ".tokens").length;
+        address[] memory tokenAddresses = new address[](tokenCount);
+        address[] memory priceFeeds = new address[](tokenCount);
 
         console.log("Platform Fee:", platformFee, "basis points");
-        console.log("Tokens to configure:", tokens.length);
+        console.log("Tokens to configure:", tokenCount);
         console.log("");
 
         vm.startBroadcast(deployerPrivateKey);
@@ -65,12 +69,13 @@ contract DeployBucketInfo is Script {
         // Configure tokens
         console.log("Configuring tokens and price feeds...");
         // Build arrays of token addresses and price feeds from the TokenConfig memory array
-        address[] memory tokenAddresses = new address[](tokens.length);
+        /* address[] memory tokenAddresses = new address[](tokens.length);
         address[] memory priceFeeds = new address[](tokens.length);
         for (uint256 i = 0; i < tokens.length; i++) {
             tokenAddresses[i] = tokens[i].tokenAddress;
             priceFeeds[i] = tokens[i].priceFeed;
         }
+        */
         bucketInfo.batchSetTokenWhitelist(tokenAddresses, true);
         bucketInfo.batchSetPriceFeeds(tokenAddresses, priceFeeds);
 
@@ -81,10 +86,7 @@ contract DeployBucketInfo is Script {
         console.log("BucketInfo Address:", address(bucketInfo));
         console.log("Owner:", bucketInfo.owner());
         console.log("Platform Fee:", bucketInfo.platformFee(), "basis points");
-        console.log(
-            "Whitelisted Tokens:",
-            bucketInfo.getWhitelistedTokenCount()
-        );
+        console.log("Whitelisted Tokens:", bucketInfo.getWhitelistedTokenCount());
         console.log("");
         console.log("Deployment complete!");
     }

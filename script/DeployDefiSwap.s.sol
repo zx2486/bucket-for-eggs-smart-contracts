@@ -13,20 +13,15 @@ contract DeployDefiSwap is Script {
     /// @dev Sepolia testnet addresses
     address constant SEPOLIA_USDT = 0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0; // Sepolia USDT
     address constant SEPOLIA_WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14; // Sepolia WETH
-    address constant SEPOLIA_UNISWAP_V3_ROUTER =
-        0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
-    address constant SEPOLIA_UNISWAP_V3_QUOTER =
-        0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3;
+    address constant SEPOLIA_UNISWAP_V3_ROUTER = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
+    address constant SEPOLIA_UNISWAP_V3_QUOTER = 0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3;
 
     /// @dev Ethereum mainnet addresses
     address constant MAINNET_USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
     address constant MAINNET_WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address constant MAINNET_UNISWAP_V3_ROUTER =
-        0xE592427A0AEce92De3Edee1F18E0157C05861564;
-    address constant MAINNET_UNISWAP_V3_QUOTER =
-        0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6;
-    address constant MAINNET_CURVE_TRIPOOL =
-        0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7;
+    address constant MAINNET_UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address constant MAINNET_UNISWAP_V3_QUOTER = 0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6;
+    address constant MAINNET_CURVE_TRIPOOL = 0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -151,24 +146,16 @@ contract DeployDefiSwap is Script {
         console.log("");
 
         console.log("Configured DEXs:");
-        DefiSwap.DEXConfig memory v3Config = defiSwap.getDEXConfig(
-            DefiSwap.DEX.UNISWAP_V3
-        );
+        DefiSwap.DEXConfig memory v3Config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V3);
         console.log("  Uniswap V3:", v3Config.enabled ? "Enabled" : "Disabled");
 
-        DefiSwap.DEXConfig memory v4Config = defiSwap.getDEXConfig(
-            DefiSwap.DEX.UNISWAP_V4
-        );
+        DefiSwap.DEXConfig memory v4Config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V4);
         console.log("  Uniswap V4:", v4Config.enabled ? "Enabled" : "Disabled");
 
-        DefiSwap.DEXConfig memory fluidConfig = defiSwap.getDEXConfig(
-            DefiSwap.DEX.FLUID
-        );
+        DefiSwap.DEXConfig memory fluidConfig = defiSwap.getDEXConfig(DefiSwap.DEX.FLUID);
         console.log("  Fluid:", fluidConfig.enabled ? "Enabled" : "Disabled");
 
-        DefiSwap.DEXConfig memory curveConfig = defiSwap.getDEXConfig(
-            DefiSwap.DEX.CURVE
-        );
+        DefiSwap.DEXConfig memory curveConfig = defiSwap.getDEXConfig(DefiSwap.DEX.CURVE);
         console.log("  Curve:", curveConfig.enabled ? "Enabled" : "Disabled");
         console.log("");
 

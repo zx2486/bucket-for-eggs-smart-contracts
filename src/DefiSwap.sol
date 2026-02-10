@@ -27,18 +27,9 @@ interface ISwapRouter {
  * @dev Interface for Curve pools
  */
 interface ICurvePool {
-    function exchange(
-        int128 i,
-        int128 j,
-        uint256 dx,
-        uint256 min_dy
-    ) external payable returns (uint256);
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external payable returns (uint256);
 
-    function get_dy(
-        int128 i,
-        int128 j,
-        uint256 dx
-    ) external view returns (uint256);
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
 }
 
 /**
@@ -79,12 +70,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     event Deposited(address indexed user, uint256 amount);
-    event Swapped(
-        uint256 usdtAmount,
-        uint256 ethReceived,
-        DEX dexUsed,
-        string dexName
-    );
+    event Swapped(uint256 usdtAmount, uint256 ethReceived, DEX dexUsed, string dexName);
     event USDTWithdrawn(address indexed recipient, uint256 amount);
     event ETHWithdrawn(address indexed recipient, uint256 amount);
     event DEXConfigUpdated(DEX dex, address router, bool enabled);
@@ -173,12 +159,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @return ethReceived Amount of ETH received
      * @return bestDex The DEX that provided the best rate
      */
-    function swap()
-        external
-        onlyOwner
-        nonReentrant
-        returns (uint256 usdtSwapped, uint256 ethReceived, DEX bestDex)
-    {
+    function swap() external onlyOwner nonReentrant returns (uint256 usdtSwapped, uint256 ethReceived, DEX bestDex) {
         uint256 contractBalance = usdt.balanceOf(address(this));
         require(contractBalance > 0, "No USDT to swap");
 
@@ -210,9 +191,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @return bestDex The DEX with the best quote
      * @return bestQuote The best quote amount in ETH
      */
-    function getBestQuote(
-        uint256 amount
-    ) public returns (DEX bestDex, uint256 bestQuote) {
+    function getBestQuote(uint256 amount) public returns (DEX bestDex, uint256 bestQuote) {
         bestQuote = 0;
         bestDex = DEX.UNISWAP_V3; // default
 
@@ -261,22 +240,13 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param amount Amount of USDT
      * @return quote Expected ETH output
      */
-    function getUniswapQuote(
-        DEX dex,
-        uint256 amount
-    ) internal returns (uint256 quote) {
+    function getUniswapQuote(DEX dex, uint256 amount) internal returns (uint256 quote) {
         DEXConfig memory config = dexConfigs[dex];
         if (config.quoter == address(0)) return 0;
 
-        try
-            IQuoter(config.quoter).quoteExactInputSingle(
-                address(usdt),
-                weth,
-                config.fee,
-                amount,
-                0
-            )
-        returns (uint256 amountOut) {
+        try IQuoter(config.quoter).quoteExactInputSingle(address(usdt), weth, config.fee, amount, 0) returns (
+            uint256 amountOut
+        ) {
             return amountOut;
         } catch {
             return 0;
@@ -291,9 +261,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     function getCurveQuote(uint256 amount) internal view returns (uint256) {
         if (curvePool == address(0)) return 0;
 
-        try ICurvePool(curvePool).get_dy(0, 1, amount) returns (
-            uint256 amountOut
-        ) {
+        try ICurvePool(curvePool).get_dy(0, 1, amount) returns (uint256 amountOut) {
             return amountOut;
         } catch {
             return 0;
@@ -306,11 +274,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param amountIn Amount of USDT to swap
      * @param minAmountOut Minimum ETH to receive (from quote)
      */
-    function executeSwap(
-        DEX dex,
-        uint256 amountIn,
-        uint256 minAmountOut
-    ) internal {
+    function executeSwap(DEX dex, uint256 amountIn, uint256 minAmountOut) internal {
         if (dex == DEX.CURVE) {
             executeSwapCurve(amountIn, minAmountOut);
         } else {
@@ -321,11 +285,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     /**
      * @notice Execute swap on Uniswap-style DEX
      */
-    function executeSwapUniswap(
-        DEX dex,
-        uint256 amountIn,
-        uint256 minAmountOut
-    ) internal {
+    function executeSwapUniswap(DEX dex, uint256 amountIn, uint256 minAmountOut) internal {
         DEXConfig memory config = dexConfigs[dex];
         require(config.router != address(0), "Router not configured");
 
@@ -333,15 +293,16 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         usdt.forceApprove(config.router, amountIn);
 
         // Execute swap
-        ISwapRouter(config.router).exactInputSingle(
-            address(usdt),
-            weth,
-            config.fee,
-            address(this),
-            amountIn,
-            (minAmountOut * 95) / 100, // 5% slippage tolerance
-            0
-        );
+        ISwapRouter(config.router)
+            .exactInputSingle(
+                address(usdt),
+                weth,
+                config.fee,
+                address(this),
+                amountIn,
+                (minAmountOut * 95) / 100, // 5% slippage tolerance
+                0
+            );
 
         // Reset approval
         usdt.forceApprove(config.router, 0);
@@ -357,12 +318,13 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         usdt.forceApprove(curvePool, amountIn);
 
         // Execute swap (0 = USDT, 1 = ETH)
-        ICurvePool(curvePool).exchange(
-            0,
-            1,
-            amountIn,
-            (minAmountOut * 95) / 100 // 5% slippage tolerance
-        );
+        ICurvePool(curvePool)
+            .exchange(
+                0,
+                1,
+                amountIn,
+                (minAmountOut * 95) / 100 // 5% slippage tolerance
+            );
 
         // Reset approval
         usdt.forceApprove(curvePool, 0);
@@ -380,19 +342,8 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param fee Fee tier (for Uniswap-style DEXs)
      * @param enabled Whether the DEX is enabled
      */
-    function configureDEX(
-        DEX dex,
-        address router,
-        address quoter,
-        uint24 fee,
-        bool enabled
-    ) external onlyOwner {
-        dexConfigs[dex] = DEXConfig({
-            router: router,
-            quoter: quoter,
-            fee: fee,
-            enabled: enabled
-        });
+    function configureDEX(DEX dex, address router, address quoter, uint24 fee, bool enabled) external onlyOwner {
+        dexConfigs[dex] = DEXConfig({router: router, quoter: quoter, fee: fee, enabled: enabled});
 
         emit DEXConfigUpdated(dex, router, enabled);
     }
@@ -414,10 +365,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param recipient Address to receive USDT
      * @param amount Amount of USDT to withdraw
      */
-    function withdrawUSDT(
-        address recipient,
-        uint256 amount
-    ) external onlyOwner nonReentrant {
+    function withdrawUSDT(address recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "Invalid recipient");
         require(amount > 0, "Amount must be greater than 0");
 
@@ -433,15 +381,12 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param recipient Address to receive ETH
      * @param amount Amount of ETH to withdraw
      */
-    function withdrawETH(
-        address payable recipient,
-        uint256 amount
-    ) external onlyOwner nonReentrant {
+    function withdrawETH(address payable recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "Invalid recipient");
         require(amount > 0, "Amount must be greater than 0");
         require(address(this).balance >= amount, "Insufficient ETH balance");
 
-        (bool success, ) = recipient.call{value: amount}("");
+        (bool success,) = recipient.call{value: amount}("");
         require(success, "ETH transfer failed");
 
         emit ETHWithdrawn(recipient, amount);
@@ -481,9 +426,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @param dex The DEX to query
      * @return config The DEX configuration
      */
-    function getDEXConfig(
-        DEX dex
-    ) external view returns (DEXConfig memory config) {
+    function getDEXConfig(DEX dex) external view returns (DEXConfig memory config) {
         return dexConfigs[dex];
     }
 

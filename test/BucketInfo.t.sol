@@ -77,12 +77,7 @@ contract BucketInfoTest is Test {
 
     function test_SetTokenWhitelistOnlyOwner() public {
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         bucketInfo.setTokenWhitelist(tokenA, true);
     }
 
@@ -129,11 +124,7 @@ contract BucketInfoTest is Test {
         address[] memory tokens = bucketInfo.getWhitelistedTokens();
 
         assertEq(tokens.length, 3);
-        assertTrue(
-            tokens[0] == address(0) ||
-                tokens[1] == address(0) ||
-                tokens[2] == address(0)
-        );
+        assertTrue(tokens[0] == address(0) || tokens[1] == address(0) || tokens[2] == address(0));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -157,12 +148,7 @@ contract BucketInfoTest is Test {
         bucketInfo.setTokenWhitelist(tokenA, true);
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         bucketInfo.setTokenPrice(tokenA, 2000 * 10 ** 8);
     }
 
@@ -253,12 +239,7 @@ contract BucketInfoTest is Test {
 
     function test_PausePlatformOnlyOwner() public {
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         bucketInfo.pausePlatform();
     }
 
@@ -266,12 +247,7 @@ contract BucketInfoTest is Test {
         bucketInfo.pausePlatform();
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         bucketInfo.unpausePlatform();
     }
 
@@ -288,12 +264,7 @@ contract BucketInfoTest is Test {
 
     function test_SetPlatformFeeOnlyOwner() public {
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         bucketInfo.setPlatformFee(200);
     }
 

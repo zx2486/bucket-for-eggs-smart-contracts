@@ -82,14 +82,8 @@ contract BucketInfo is Ownable, Pausable {
      * @param token Address of the token (use address(0) for native ETH)
      * @param whitelisted True to whitelist, false to remove
      */
-    function setTokenWhitelist(
-        address token,
-        bool whitelisted
-    ) external onlyOwner {
-        require(
-            isWhitelisted[token] != whitelisted,
-            "Already in desired state"
-        );
+    function setTokenWhitelist(address token, bool whitelisted) external onlyOwner {
+        require(isWhitelisted[token] != whitelisted, "Already in desired state");
 
         isWhitelisted[token] = whitelisted;
 
@@ -99,9 +93,7 @@ contract BucketInfo is Ownable, Pausable {
             // Remove from array
             for (uint256 i = 0; i < whitelistedTokens.length; i++) {
                 if (whitelistedTokens[i] == token) {
-                    whitelistedTokens[i] = whitelistedTokens[
-                        whitelistedTokens.length - 1
-                    ];
+                    whitelistedTokens[i] = whitelistedTokens[whitelistedTokens.length - 1];
                     whitelistedTokens.pop();
                     break;
                 }
@@ -116,10 +108,7 @@ contract BucketInfo is Ownable, Pausable {
      * @param tokens Array of token addresses
      * @param whitelisted True to whitelist, false to remove
      */
-    function batchSetTokenWhitelist(
-        address[] calldata tokens,
-        bool whitelisted
-    ) external onlyOwner {
+    function batchSetTokenWhitelist(address[] calldata tokens, bool whitelisted) external onlyOwner {
         for (uint256 i = 0; i < tokens.length; i++) {
             if (isWhitelisted[tokens[i]] != whitelisted) {
                 isWhitelisted[tokens[i]] = whitelisted;
@@ -130,9 +119,7 @@ contract BucketInfo is Ownable, Pausable {
                     // Remove from array
                     for (uint256 j = 0; j < whitelistedTokens.length; j++) {
                         if (whitelistedTokens[j] == tokens[i]) {
-                            whitelistedTokens[j] = whitelistedTokens[
-                                whitelistedTokens.length - 1
-                            ];
+                            whitelistedTokens[j] = whitelistedTokens[whitelistedTokens.length - 1];
                             whitelistedTokens.pop();
                             break;
                         }
@@ -183,10 +170,7 @@ contract BucketInfo is Ownable, Pausable {
      * @param tokens Array of token addresses
      * @param prices Array of prices (must match tokens length)
      */
-    function batchSetTokenPrices(
-        address[] calldata tokens,
-        uint256[] calldata prices
-    ) external onlyOwner {
+    function batchSetTokenPrices(address[] calldata tokens, uint256[] calldata prices) external onlyOwner {
         require(tokens.length == prices.length, "Arrays length mismatch");
 
         for (uint256 i = 0; i < tokens.length; i++) {
@@ -212,10 +196,7 @@ contract BucketInfo is Ownable, Pausable {
         emit PriceFeedUpdated(token, priceFeed);
     }
 
-    function batchSetPriceFeeds(
-        address[] calldata tokens,
-        address[] calldata priceFeeds
-    ) external onlyOwner {
+    function batchSetPriceFeeds(address[] calldata tokens, address[] calldata priceFeeds) external onlyOwner {
         require(tokens.length == priceFeeds.length, "Arrays length mismatch");
 
         for (uint256 i = 0; i < tokens.length; i++) {
@@ -235,10 +216,8 @@ contract BucketInfo is Ownable, Pausable {
     function getTokenPrice(address token) external view returns (uint256) {
         require(isWhitelisted[token], "Token not whitelisted");
         if (priceFeedsChainlink[token] != address(0)) {
-            AggregatorV3Interface priceFeed = AggregatorV3Interface(
-                priceFeedsChainlink[token]
-            );
-            (, int256 price, , , ) = priceFeed.latestRoundData();
+            AggregatorV3Interface priceFeed = AggregatorV3Interface(priceFeedsChainlink[token]);
+            (, int256 price,,,) = priceFeed.latestRoundData();
             uint8 decimals = priceFeed.decimals();
             // Adjust price to have 8 decimals
             if (decimals < PRICE_DECIMALS) {
@@ -251,8 +230,7 @@ contract BucketInfo is Ownable, Pausable {
         }
         // Check if manual price is stale (older than 30 days)
         require(
-            priceUpdateTimestamps[token] > 0 &&
-                block.timestamp - priceUpdateTimestamps[token] <= 30 days,
+            priceUpdateTimestamps[token] > 0 && block.timestamp - priceUpdateTimestamps[token] <= 30 days,
             "Price is outdated"
         );
         return tokenPrices[token];
@@ -281,9 +259,7 @@ contract BucketInfo is Ownable, Pausable {
      * @param token Address of the token
      * @return price Manually set token price (0 if not set or using Chainlink)
      */
-    function getManualTokenPrice(
-        address token
-    ) external view returns (uint256) {
+    function getManualTokenPrice(address token) external view returns (uint256) {
         return tokenPrices[token];
     }
 

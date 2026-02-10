@@ -17,16 +17,24 @@ contract MockDEXRouter {
     }
 
     function exactInputSingle(
-        address /* tokenIn */,
-        address /* tokenOut */,
-        uint24 /* fee */,
+        address,
+        /* tokenIn */
+        address,
+        /* tokenOut */
+        uint24,
+        /* fee */
         address recipient,
         uint256 amountIn,
-        uint256 /* amountOutMinimum */,
+        uint256,
+        /* amountOutMinimum */
         uint160 /* sqrtPriceLimitX96 */
-    ) external payable returns (uint256 amountOut) {
+    )
+        external
+        payable
+        returns (uint256 amountOut)
+    {
         amountOut = (amountIn * exchangeRate) / 1e6;
-        (bool success, ) = recipient.call{value: amountOut}("");
+        (bool success,) = recipient.call{value: amountOut}("");
         require(success, "ETH transfer failed");
         return amountOut;
     }
@@ -50,12 +58,19 @@ contract MockQuoter {
     }
 
     function quoteExactInputSingle(
-        address /* tokenIn */,
-        address /* tokenOut */,
-        uint24 /* fee */,
+        address,
+        /* tokenIn */
+        address,
+        /* tokenOut */
+        uint24,
+        /* fee */
         uint256 amountIn,
         uint160 /* sqrtPriceLimitX96 */
-    ) external view returns (uint256 amountOut) {
+    )
+        external
+        view
+        returns (uint256 amountOut)
+    {
         return (amountIn * exchangeRate) / 1e6;
     }
 
@@ -76,22 +91,34 @@ contract MockCurvePool {
     }
 
     function exchange(
-        int128 /* i */,
-        int128 /* j */,
+        int128,
+        /* i */
+        int128,
+        /* j */
         uint256 dx,
         uint256 /* min_dy */
-    ) external payable returns (uint256) {
+    )
+        external
+        payable
+        returns (uint256)
+    {
         uint256 dy = (dx * exchangeRate) / 1e6;
-        (bool success, ) = msg.sender.call{value: dy}("");
+        (bool success,) = msg.sender.call{value: dy}("");
         require(success, "ETH transfer failed");
         return dy;
     }
 
     function get_dy(
-        int128 /* i */,
-        int128 /* j */,
+        int128,
+        /* i */
+        int128,
+        /* j */
         uint256 dx
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         return (dx * exchangeRate) / 1e6;
     }
 
@@ -137,12 +164,7 @@ contract DefiSwapTest is Test {
 
     // Events to test
     event Deposited(address indexed user, uint256 amount);
-    event Swapped(
-        uint256 usdtAmount,
-        uint256 ethReceived,
-        DefiSwap.DEX dexUsed,
-        string dexName
-    );
+    event Swapped(uint256 usdtAmount, uint256 ethReceived, DefiSwap.DEX dexUsed, string dexName);
     event USDTWithdrawn(address indexed recipient, uint256 amount);
     event ETHWithdrawn(address indexed recipient, uint256 amount);
     event DEXConfigUpdated(DefiSwap.DEX dex, address router, bool enabled);
@@ -186,29 +208,11 @@ contract DefiSwapTest is Test {
             true
         );
 
-        defiSwap.configureDEX(
-            DefiSwap.DEX.UNISWAP_V4,
-            address(uniswapV4Router),
-            address(uniswapV4Quoter),
-            3000,
-            true
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.UNISWAP_V4, address(uniswapV4Router), address(uniswapV4Quoter), 3000, true);
 
-        defiSwap.configureDEX(
-            DefiSwap.DEX.FLUID,
-            address(fluidRouter),
-            address(fluidQuoter),
-            3000,
-            true
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.FLUID, address(fluidRouter), address(fluidQuoter), 3000, true);
 
-        defiSwap.configureDEX(
-            DefiSwap.DEX.CURVE,
-            address(0),
-            address(0),
-            0,
-            true
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.CURVE, address(0), address(0), 0, true);
 
         defiSwap.setCurvePool(address(curvePool));
 
@@ -279,10 +283,7 @@ contract DefiSwapTest is Test {
 
         assertEq(defiSwap.getUserBalance(user1), depositAmount1);
         assertEq(defiSwap.getUserBalance(user2), depositAmount2);
-        assertEq(
-            defiSwap.totalUSDTDeposited(),
-            depositAmount1 + depositAmount2
-        );
+        assertEq(defiSwap.totalUSDTDeposited(), depositAmount1 + depositAmount2);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -298,17 +299,9 @@ contract DefiSwapTest is Test {
         defiSwap.depositUSDT(depositAmount);
         vm.stopPrank();
 
-        (
-            uint256 usdtSwapped,
-            uint256 ethReceived,
-            DefiSwap.DEX dexUsed
-        ) = defiSwap.swap();
+        (uint256 usdtSwapped, uint256 ethReceived, DefiSwap.DEX dexUsed) = defiSwap.swap();
 
-        assertEq(
-            uint256(dexUsed),
-            uint256(DefiSwap.DEX.CURVE),
-            "Should use Curve"
-        );
+        assertEq(uint256(dexUsed), uint256(DefiSwap.DEX.CURVE), "Should use Curve");
         assertEq(usdtSwapped, depositAmount / 2);
 
         // Verify ETH received matches Curve's rate
@@ -321,13 +314,7 @@ contract DefiSwapTest is Test {
 
     function test_SwapSelectsFluidWhenCurveDisabled() public {
         // Disable Curve
-        defiSwap.configureDEX(
-            DefiSwap.DEX.CURVE,
-            address(0),
-            address(0),
-            0,
-            false
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.CURVE, address(0), address(0), 0, false);
 
         uint256 depositAmount = 2000 * 10 ** USDT_DECIMALS;
 
@@ -336,31 +323,15 @@ contract DefiSwapTest is Test {
         defiSwap.depositUSDT(depositAmount);
         vm.stopPrank();
 
-        (, , DefiSwap.DEX dexUsed) = defiSwap.swap();
+        (,, DefiSwap.DEX dexUsed) = defiSwap.swap();
 
-        assertEq(
-            uint256(dexUsed),
-            uint256(DefiSwap.DEX.FLUID),
-            "Should use Fluid when Curve disabled"
-        );
+        assertEq(uint256(dexUsed), uint256(DefiSwap.DEX.FLUID), "Should use Fluid when Curve disabled");
     }
 
     function test_SwapSelectsUniswapV4WhenFluidAndCurveDisabled() public {
         // Disable Curve and Fluid
-        defiSwap.configureDEX(
-            DefiSwap.DEX.CURVE,
-            address(0),
-            address(0),
-            0,
-            false
-        );
-        defiSwap.configureDEX(
-            DefiSwap.DEX.FLUID,
-            address(0),
-            address(0),
-            0,
-            false
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.CURVE, address(0), address(0), 0, false);
+        defiSwap.configureDEX(DefiSwap.DEX.FLUID, address(0), address(0), 0, false);
 
         uint256 depositAmount = 2000 * 10 ** USDT_DECIMALS;
 
@@ -369,13 +340,9 @@ contract DefiSwapTest is Test {
         defiSwap.depositUSDT(depositAmount);
         vm.stopPrank();
 
-        (, , DefiSwap.DEX dexUsed) = defiSwap.swap();
+        (,, DefiSwap.DEX dexUsed) = defiSwap.swap();
 
-        assertEq(
-            uint256(dexUsed),
-            uint256(DefiSwap.DEX.UNISWAP_V4),
-            "Should use Uniswap V4"
-        );
+        assertEq(uint256(dexUsed), uint256(DefiSwap.DEX.UNISWAP_V4), "Should use Uniswap V4");
     }
 
     function test_SwapDynamicPriceSelection() public {
@@ -387,7 +354,7 @@ contract DefiSwapTest is Test {
         vm.stopPrank();
 
         // First swap - should use Curve (best rate)
-        (, , DefiSwap.DEX dex1) = defiSwap.swap();
+        (,, DefiSwap.DEX dex1) = defiSwap.swap();
         assertEq(uint256(dex1), uint256(DefiSwap.DEX.CURVE));
 
         // Change prices - make Uniswap V3 the best
@@ -400,7 +367,7 @@ contract DefiSwapTest is Test {
         uniswapV3Quoter.setExchangeRate(0.0006 ether);
 
         // Second swap - should use Uniswap V3
-        (, , DefiSwap.DEX dex2) = defiSwap.swap();
+        (,, DefiSwap.DEX dex2) = defiSwap.swap();
         assertEq(uint256(dex2), uint256(DefiSwap.DEX.UNISWAP_V3));
 
         console.log("First swap used:", defiSwap.getDEXName(dex1));
@@ -414,15 +381,9 @@ contract DefiSwapTest is Test {
     function test_GetBestQuote() public {
         uint256 amount = 1000 * 10 ** USDT_DECIMALS;
 
-        (DefiSwap.DEX bestDex, uint256 bestQuote) = defiSwap.getBestQuote(
-            amount
-        );
+        (DefiSwap.DEX bestDex, uint256 bestQuote) = defiSwap.getBestQuote(amount);
 
-        assertEq(
-            uint256(bestDex),
-            uint256(DefiSwap.DEX.CURVE),
-            "Curve should have best quote"
-        );
+        assertEq(uint256(bestDex), uint256(DefiSwap.DEX.CURVE), "Curve should have best quote");
 
         uint256 expectedQuote = (amount * CURVE_RATE) / 1e6;
         assertEq(bestQuote, expectedQuote);
@@ -430,32 +391,14 @@ contract DefiSwapTest is Test {
 
     function test_GetBestQuoteWithSomeDEXsDisabled() public {
         // Disable Curve and Fluid
-        defiSwap.configureDEX(
-            DefiSwap.DEX.CURVE,
-            address(0),
-            address(0),
-            0,
-            false
-        );
-        defiSwap.configureDEX(
-            DefiSwap.DEX.FLUID,
-            address(0),
-            address(0),
-            0,
-            false
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.CURVE, address(0), address(0), 0, false);
+        defiSwap.configureDEX(DefiSwap.DEX.FLUID, address(0), address(0), 0, false);
 
         uint256 amount = 1000 * 10 ** USDT_DECIMALS;
 
-        (DefiSwap.DEX bestDex, uint256 bestQuote) = defiSwap.getBestQuote(
-            amount
-        );
+        (DefiSwap.DEX bestDex, uint256 bestQuote) = defiSwap.getBestQuote(amount);
 
-        assertEq(
-            uint256(bestDex),
-            uint256(DefiSwap.DEX.UNISWAP_V4),
-            "Uniswap V4 should have best quote"
-        );
+        assertEq(uint256(bestDex), uint256(DefiSwap.DEX.UNISWAP_V4), "Uniswap V4 should have best quote");
 
         uint256 expectedQuote = (amount * UNISWAP_V4_RATE) / 1e6;
         assertEq(bestQuote, expectedQuote);
@@ -472,17 +415,9 @@ contract DefiSwapTest is Test {
         vm.expectEmit(false, false, false, true);
         emit DEXConfigUpdated(DefiSwap.DEX.UNISWAP_V3, newRouter, true);
 
-        defiSwap.configureDEX(
-            DefiSwap.DEX.UNISWAP_V3,
-            newRouter,
-            newQuoter,
-            5000,
-            true
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.UNISWAP_V3, newRouter, newQuoter, 5000, true);
 
-        DefiSwap.DEXConfig memory config = defiSwap.getDEXConfig(
-            DefiSwap.DEX.UNISWAP_V3
-        );
+        DefiSwap.DEXConfig memory config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V3);
         assertEq(config.router, newRouter);
         assertEq(config.quoter, newQuoter);
         assertEq(config.fee, 5000);
@@ -492,13 +427,7 @@ contract DefiSwapTest is Test {
     function test_ConfigureDEXRevertsWhenNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        defiSwap.configureDEX(
-            DefiSwap.DEX.UNISWAP_V3,
-            address(0),
-            address(0),
-            0,
-            false
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.UNISWAP_V3, address(0), address(0), 0, false);
     }
 
     function test_SetCurvePool() public {
@@ -538,34 +467,10 @@ contract DefiSwapTest is Test {
 
     function test_SwapRevertsWhenNoValidQuotes() public {
         // Disable all DEXs
-        defiSwap.configureDEX(
-            DefiSwap.DEX.UNISWAP_V3,
-            address(0),
-            address(0),
-            0,
-            false
-        );
-        defiSwap.configureDEX(
-            DefiSwap.DEX.UNISWAP_V4,
-            address(0),
-            address(0),
-            0,
-            false
-        );
-        defiSwap.configureDEX(
-            DefiSwap.DEX.FLUID,
-            address(0),
-            address(0),
-            0,
-            false
-        );
-        defiSwap.configureDEX(
-            DefiSwap.DEX.CURVE,
-            address(0),
-            address(0),
-            0,
-            false
-        );
+        defiSwap.configureDEX(DefiSwap.DEX.UNISWAP_V3, address(0), address(0), 0, false);
+        defiSwap.configureDEX(DefiSwap.DEX.UNISWAP_V4, address(0), address(0), 0, false);
+        defiSwap.configureDEX(DefiSwap.DEX.FLUID, address(0), address(0), 0, false);
+        defiSwap.configureDEX(DefiSwap.DEX.CURVE, address(0), address(0), 0, false);
 
         uint256 depositAmount = 1000 * 10 ** USDT_DECIMALS;
         vm.startPrank(user1);
@@ -626,9 +531,7 @@ contract DefiSwapTest is Test {
     }
 
     function test_GetDEXConfig() public view {
-        DefiSwap.DEXConfig memory config = defiSwap.getDEXConfig(
-            DefiSwap.DEX.UNISWAP_V3
-        );
+        DefiSwap.DEXConfig memory config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V3);
         assertEq(config.router, address(uniswapV3Router));
         assertEq(config.quoter, address(uniswapV3Quoter));
         assertEq(config.fee, 3000);
@@ -648,18 +551,10 @@ contract DefiSwapTest is Test {
         usdt.approve(address(defiSwap), depositAmount);
         defiSwap.depositUSDT(depositAmount);
         vm.stopPrank();
-        console.log(
-            "1. User deposited:",
-            depositAmount / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("1. User deposited:", depositAmount / 10 ** USDT_DECIMALS, "USDT");
 
         // 2. Owner swaps 50% (automatically selects best DEX)
-        (
-            uint256 usdtSwapped,
-            uint256 ethReceived,
-            DefiSwap.DEX dexUsed
-        ) = defiSwap.swap();
+        (uint256 usdtSwapped, uint256 ethReceived, DefiSwap.DEX dexUsed) = defiSwap.swap();
         console.log("2. Swapped:", usdtSwapped / 10 ** USDT_DECIMALS, "USDT");
         console.log("   Received:", ethReceived, "wei ETH");
         console.log("   Used DEX:", defiSwap.getDEXName(dexUsed));
@@ -672,11 +567,7 @@ contract DefiSwapTest is Test {
         // 4. Owner withdraws
         uint256 withdrawAmount = 1000 * 10 ** USDT_DECIMALS;
         defiSwap.withdrawUSDT(owner, withdrawAmount);
-        console.log(
-            "4. Owner withdrew:",
-            withdrawAmount / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("4. Owner withdrew:", withdrawAmount / 10 ** USDT_DECIMALS, "USDT");
     }
 
     function test_MultipleSwapsWithChangingPrices() public {
@@ -688,7 +579,7 @@ contract DefiSwapTest is Test {
         vm.stopPrank();
 
         // First swap
-        (, , DefiSwap.DEX dex1) = defiSwap.swap();
+        (,, DefiSwap.DEX dex1) = defiSwap.swap();
         console.log("First swap used:", defiSwap.getDEXName(dex1));
 
         // Change market conditions - make Uniswap V3 best
@@ -696,7 +587,7 @@ contract DefiSwapTest is Test {
         uniswapV3Quoter.setExchangeRate(0.0007 ether);
 
         // Second swap
-        (, , DefiSwap.DEX dex2) = defiSwap.swap();
+        (,, DefiSwap.DEX dex2) = defiSwap.swap();
         console.log("Second swap used:", defiSwap.getDEXName(dex2));
 
         assertEq(uint256(dex1), uint256(DefiSwap.DEX.CURVE));
@@ -719,12 +610,9 @@ contract DefiSwapTest is Test {
         assertEq(defiSwap.totalUSDTDeposited(), amount);
     }
 
-    function testFuzz_SwapAlwaysSelectsBestPrice(
-        uint256 v3Rate,
-        uint256 v4Rate,
-        uint256 fluidRate,
-        uint256 curveRate
-    ) public {
+    function testFuzz_SwapAlwaysSelectsBestPrice(uint256 v3Rate, uint256 v4Rate, uint256 fluidRate, uint256 curveRate)
+        public
+    {
         // Bound rates to reasonable range
         v3Rate = bound(v3Rate, 0.0001 ether, 0.001 ether);
         v4Rate = bound(v4Rate, 0.0001 ether, 0.001 ether);
@@ -753,16 +641,12 @@ contract DefiSwapTest is Test {
         defiSwap.depositUSDT(depositAmount);
         vm.stopPrank();
 
-        (, uint256 ethReceived, ) = defiSwap.swap();
+        (, uint256 ethReceived,) = defiSwap.swap();
 
         // Verify we got the best rate (within rounding)
         uint256 expectedETH = ((depositAmount / 2) * bestRate) / 1e6;
         uint256 minExpected = (expectedETH * 95) / 100; // Allow 5% slippage
 
-        assertGe(
-            ethReceived,
-            minExpected,
-            "Should receive at least best rate minus slippage"
-        );
+        assertGe(ethReceived, minExpected, "Should receive at least best rate minus slippage");
     }
 }

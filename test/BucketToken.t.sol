@@ -15,11 +15,7 @@ contract BucketTokenTest is Test {
     uint256 constant MAX_SUPPLY = 1_000_000_000 * 10 ** 18;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 
     function setUp() public {
         owner = address(this);
@@ -107,12 +103,7 @@ contract BucketTokenTest is Test {
         uint256 mintAmount = 1000 * 10 ** 18;
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         token.mint(user1, mintAmount);
     }
 
@@ -190,12 +181,7 @@ contract BucketTokenTest is Test {
 
     function test_PauseOnlyOwner() public {
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         token.pause();
     }
 
@@ -203,12 +189,7 @@ contract BucketTokenTest is Test {
         token.pause();
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "OwnableUnauthorizedAccount(address)",
-                user1
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
         token.unpause();
     }
 
@@ -253,9 +234,7 @@ contract BucketTokenTest is Test {
         // Create permit signature
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
                 alice,
                 user1,
                 amount,
@@ -264,9 +243,7 @@ contract BucketTokenTest is Test {
             )
         );
 
-        bytes32 digest = keccak256(
-            abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)
-        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash));
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
 

@@ -2,107 +2,107 @@
     "platformFee": 100,
     "tokens": [
         {
-            "address": "0x0000000000000000000000000000000000000000",
+            "tokenAddress": "0x0000000000000000000000000000000000000000",
             "priceFeed": "0x547a514d5e3769680Ce22B2361c10Ea13619e8a9",
             "name": "ETH"
         },
         {
-            "address": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+            "tokenAddress": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
             "priceFeed": "0xCfE54B5cD566aB89272946F602D76Ea879CAb4a8",
             "name": "stETH"
         },
         {
-            "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+            "tokenAddress": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
             "priceFeed": "0x2665701293fCbEB223D11A08D826563EDcCE423A",
             "name": "cbBTC"
         },
         {
-            "address": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
+            "tokenAddress": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
             "priceFeed": "0x8350b7De6a6a2C1368E7D4Bd968190e13E354297",
             "name": "tBTC"
         },
         {
-            "address": "0xB8c77482e45F1F44dE1745F52C74426C631bDD52",
+            "tokenAddress": "0xB8c77482e45F1F44dE1745F52C74426C631bDD52",
             "priceFeed": "0x14e613AC84a31f709eadbdF89C6CC390fDc9540A",
             "name": "BNB"
         },
         {
-            "address": "0xD31a59c85aE9D8edEFeC411D448f90841571b89c",
+            "tokenAddress": "0xD31a59c85aE9D8edEFeC411D448f90841571b89c",
             "priceFeed": "0x4ffC43a60e009B551865A93d232E33Fce9f01507",
             "name": "Wrapped SOL"
         },
         {
-            "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            "tokenAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
             "priceFeed": "0x3E7d1eAB13ad0104d2750B8863b489D65364e32D",
             "name": "USDT"
         },
         {
-            "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "tokenAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
             "priceFeed": "0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6",
             "name": "USDC"
         },
         {
-            "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+            "tokenAddress": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
             "priceFeed": "0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9",
             "name": "DAI"
         },
         {
-            "address": "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+            "tokenAddress": "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
             "priceFeed": "0x547a514d5e3769680Ce22B2361c10Ea13619e8a9",
             "name": "AAVE"
         },
         {
-            "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+            "tokenAddress": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
             "priceFeed": "0x2c1d072e956AFFC0D435Cb7AC38EF18d24d9127c",
             "name": "LINK"
         },
         {
-            "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+            "tokenAddress": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
             "priceFeed": "0x553303d460EE0afB37EdFf9bE42922D8FF63220e",
             "name": "UNI"
         },
         {
-            "address": "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1",
+            "tokenAddress": "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1",
             "priceFeed": "0x31697852a68433DbCc2Ff612c516d69E3D9bd08F",
             "name": "ARB"
         },
         {
-            "address": "0xD533a949740bb3306d119CC777fa900bA034cd52",
+            "tokenAddress": "0xD533a949740bb3306d119CC777fa900bA034cd52",
             "priceFeed": "0xCd627aA160A6fA45Eb793D19Ef54f5062F20f33f",
             "name": "CRV"
         },
         {
-            "address": "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83",
+            "tokenAddress": "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83",
             "priceFeed": "0xf2917e602C2dCa458937fad715bb1E465305A4A1",
             "name": "EIGEN"
         },
         {
-            "address": "0xC18360217D8F7Ab5e7c516566761Ea12Ce7F9D72",
+            "tokenAddress": "0xC18360217D8F7Ab5e7c516566761Ea12Ce7F9D72",
             "priceFeed": "0x5C00128d4d1c2F4f652C267d7bcdD7aC99C16E16",
             "name": "ENS"
         },
         {
-            "address": "0x3845badAde8e6dFF049820680d1F14bD3903a5d0",
+            "tokenAddress": "0x3845badAde8e6dFF049820680d1F14bD3903a5d0",
             "priceFeed": "0x35E3f7E558C04cE7eEE1629258EcbbA03B36Ec56",
             "name": "SAND"
         },
         {
-            "address": "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2",
+            "tokenAddress": "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2",
             "priceFeed": "0xCc70F09A6CC17553b2E31954cD36E4A2d89501f7",
             "name": "SUSHI"
         },
         {
-            "address": "0x0bc529c00c6401aef6d220be8c6ea1667f6ad93e",
+            "tokenAddress": "0x0bc529c00c6401aef6d220be8c6ea1667f6ad93e",
             "priceFeed": "0xA027702dbb89fbd58938e4324ac03B58d812b0E1",
             "name": "YFI"
         },
         {
-            "address": "0xe41d2489571d322189246dafa5ebde1f4699f498",
+            "tokenAddress": "0xe41d2489571d322189246dafa5ebde1f4699f498",
             "priceFeed": "0x2885d15b8Af22648b98B122b22FDF4D2a56c6023",
             "name": "ZRX"
         },
         {
-            "address": "0x111111111117dC0aa78b770fA6A738034120C302",
+            "tokenAddress": "0x111111111117dC0aa78b770fA6A738034120C302",
             "priceFeed": "0xc929ad75B72593967DE83E7F7Cda0493458261D9",
             "name": "1INCH"
         }

@@ -21,19 +21,27 @@ contract Mock1inchRouter {
      * @dev Accepts USDT and returns ETH based on exchange rate
      */
     function swap(
-        address /* executor */,
-        address /* srcToken */,
+        address,
+        /* executor */
+        address,
+        /* srcToken */
         uint256 amount,
-        address /* dstToken */,
-        address /* dstReceiver */,
+        address,
+        /* dstToken */
+        address,
+        /* dstReceiver */
         uint256 /* minReturnAmount */
-    ) external payable returns (uint256) {
+    )
+        external
+        payable
+        returns (uint256)
+    {
         // Calculate ETH to return based on USDT amount and rate
         // USDT has 6 decimals, ETH has 18 decimals
         uint256 ethToReturn = (amount * exchangeRate) / 1e6;
 
         // Transfer ETH to caller (the BasicSwap contract)
-        (bool success, ) = msg.sender.call{value: ethToReturn}("");
+        (bool success,) = msg.sender.call{value: ethToReturn}("");
         require(success, "ETH transfer failed");
 
         return ethToReturn;
@@ -179,14 +187,8 @@ contract BasicSwapTest is Test {
         assertEq(basicSwap.getUserBalance(user2), depositAmount2);
 
         // Verify total
-        assertEq(
-            basicSwap.totalUSDTDeposited(),
-            depositAmount1 + depositAmount2
-        );
-        assertEq(
-            usdt.balanceOf(address(basicSwap)),
-            depositAmount1 + depositAmount2
-        );
+        assertEq(basicSwap.totalUSDTDeposited(), depositAmount1 + depositAmount2);
+        assertEq(usdt.balanceOf(address(basicSwap)), depositAmount1 + depositAmount2);
     }
 
     function test_DepositUSDTRevertsWithZeroAmount() public {
@@ -237,8 +239,7 @@ contract BasicSwapTest is Test {
 
         // Calculate expected values
         uint256 expectedUSDTSwapped = depositAmount / 2; // 50% = 1000 USDT
-        uint256 expectedETHReceived = (expectedUSDTSwapped *
-            INITIAL_EXCHANGE_RATE) / (10 ** USDT_DECIMALS);
+        uint256 expectedETHReceived = (expectedUSDTSwapped * INITIAL_EXCHANGE_RATE) / (10 ** USDT_DECIMALS);
 
         // Build 1inch swap calldata
         bytes memory swapCalldata = abi.encodeWithSignature(
@@ -259,9 +260,7 @@ contract BasicSwapTest is Test {
         emit Swapped(expectedUSDTSwapped, expectedETHReceived);
 
         // Execute swap as owner
-        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(
-            swapCalldata
-        );
+        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(swapCalldata);
 
         // Verify returned values
         assertEq(usdtSwapped, expectedUSDTSwapped);
@@ -298,17 +297,14 @@ contract BasicSwapTest is Test {
         );
 
         // Execute swap
-        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(
-            swapCalldata
-        );
+        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(swapCalldata);
 
         // Verify 50% was swapped
         assertEq(usdtSwapped, depositAmount / 2);
         assertEq(usdtSwapped, contractBalanceBefore / 2);
 
         // Verify ETH received
-        uint256 expectedETH = (usdtSwapped * INITIAL_EXCHANGE_RATE) /
-            (10 ** USDT_DECIMALS);
+        uint256 expectedETH = (usdtSwapped * INITIAL_EXCHANGE_RATE) / (10 ** USDT_DECIMALS);
         assertEq(ethReceived, expectedETH);
     }
 
@@ -556,7 +552,7 @@ contract BasicSwapTest is Test {
         uint256 balanceBefore = address(basicSwap).balance;
 
         // Send ETH to contract
-        (bool success, ) = address(basicSwap).call{value: sendAmount}("");
+        (bool success,) = address(basicSwap).call{value: sendAmount}("");
         assertTrue(success);
 
         assertEq(address(basicSwap).balance, balanceBefore + sendAmount);
@@ -575,11 +571,7 @@ contract BasicSwapTest is Test {
         usdt.approve(address(basicSwap), depositAmount);
         basicSwap.depositUSDT(depositAmount);
         vm.stopPrank();
-        console.log(
-            "1. User deposited:",
-            depositAmount / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("1. User deposited:", depositAmount / 10 ** USDT_DECIMALS, "USDT");
 
         // 2. Owner swaps 50% via 1inch
         bytes memory swapCalldata = abi.encodeWithSignature(
@@ -592,41 +584,24 @@ contract BasicSwapTest is Test {
             0
         );
 
-        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(
-            swapCalldata
-        );
+        (uint256 usdtSwapped, uint256 ethReceived) = basicSwap.swap(swapCalldata);
         console.log("2. Swapped:", usdtSwapped / 10 ** USDT_DECIMALS, "USDT");
         console.log("   Received:", ethReceived, "wei ETH");
 
         // 3. Verify contract state
         assertEq(basicSwap.getUserBalance(user1), depositAmount);
         assertEq(basicSwap.getContractETHBalance(), ethReceived);
-        console.log(
-            "3. Contract ETH balance:",
-            basicSwap.getContractETHBalance()
-        );
-        console.log(
-            "   Contract USDT balance:",
-            basicSwap.getContractUSDTBalance() / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("3. Contract ETH balance:", basicSwap.getContractETHBalance());
+        console.log("   Contract USDT balance:", basicSwap.getContractUSDTBalance() / 10 ** USDT_DECIMALS, "USDT");
 
         // 4. Owner withdraws some USDT
         uint256 withdrawAmount = 1000 * 10 ** USDT_DECIMALS;
         basicSwap.withdrawUSDT(owner, withdrawAmount);
-        console.log(
-            "4. Owner withdrew:",
-            withdrawAmount / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("4. Owner withdrew:", withdrawAmount / 10 ** USDT_DECIMALS, "USDT");
 
         // 5. Verify final state
         assertEq(usdt.balanceOf(owner), withdrawAmount);
-        console.log(
-            "5. Owner USDT balance:",
-            usdt.balanceOf(owner) / 10 ** USDT_DECIMALS,
-            "USDT"
-        );
+        console.log("5. Owner USDT balance:", usdt.balanceOf(owner) / 10 ** USDT_DECIMALS, "USDT");
     }
 
     function test_MultipleSwaps() public {
@@ -650,9 +625,7 @@ contract BasicSwapTest is Test {
             0
         );
 
-        (uint256 usdtSwapped1, uint256 ethReceived1) = basicSwap.swap(
-            swapCalldata1
-        );
+        (uint256 usdtSwapped1, uint256 ethReceived1) = basicSwap.swap(swapCalldata1);
         assertEq(usdtSwapped1, expectedFirstSwap);
 
         // After first swap, contract still has 8000 USDT (mock doesn't actually transfer)
@@ -670,16 +643,11 @@ contract BasicSwapTest is Test {
             0
         );
 
-        (uint256 usdtSwapped2, uint256 ethReceived2) = basicSwap.swap(
-            swapCalldata2
-        );
+        (uint256 usdtSwapped2, uint256 ethReceived2) = basicSwap.swap(swapCalldata2);
         assertEq(usdtSwapped2, expectedSecondSwap);
 
         // Verify total ETH received
-        assertEq(
-            basicSwap.getContractETHBalance(),
-            ethReceived1 + ethReceived2
-        );
+        assertEq(basicSwap.getContractETHBalance(), ethReceived1 + ethReceived2);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -699,9 +667,7 @@ contract BasicSwapTest is Test {
         assertEq(basicSwap.totalUSDTDeposited(), amount);
     }
 
-    function testFuzz_SwapWithDifferentExchangeRates(
-        uint256 exchangeRate
-    ) public {
+    function testFuzz_SwapWithDifferentExchangeRates(uint256 exchangeRate) public {
         // Bound exchange rate to reasonable range (0.0001 to 10 ETH per USDT)
         exchangeRate = bound(exchangeRate, 0.0001 ether, 10 ether);
 

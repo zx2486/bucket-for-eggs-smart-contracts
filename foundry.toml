@@ -18,6 +18,12 @@ remappings = [
     "@chainlink/=lib/chainlink-brownie-contracts/contracts/src/v0.8/"
 ]
 
+# File system permissions
+fs_permissions = [
+    { access = "read", path = "./configs" },
+    { access = "read-write", path = "./broadcast" }
+]
+
 # Testing configuration
 [profile.default.fuzz]
 runs = 256

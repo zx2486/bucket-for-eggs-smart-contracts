@@ -13,10 +13,10 @@ source .env
 NETWORK=${1:-sepolia}
 
 # Validate network
-if [ ! -f "config/${NETWORK}.json" ]; then
-    echo "Error: Configuration file config/${NETWORK}.json not found"
+if [ ! -f "configs/${NETWORK}.json" ]; then
+    echo "Error: Configuration file configs/${NETWORK}.json not found"
     echo "Available networks:"
-    ls config/*.json 2>/dev/null | sed 's/config\///' | sed 's/.json//' || echo "No configurations found"
+    ls configs/*.json 2>/dev/null | sed 's/configs\///' | sed 's/.json//' || echo "No configurations found"
     exit 1
 fi
 
@@ -37,7 +37,7 @@ echo "========================================="
 echo "Network: $NETWORK"
 echo "RPC URL: $RPC_URL"
 echo "Deployer: $(cast wallet address --private-key $PRIVATE_KEY)"
-echo "Config: config/${NETWORK}.json"
+echo "Config: configs/${NETWORK}.json"
 echo ""
 echo "Press Enter to continue or Ctrl+C to cancel..."
 read
