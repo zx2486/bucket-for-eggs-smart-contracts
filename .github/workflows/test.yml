@@ -28,15 +28,6 @@ jobs:
       - name: Show Forge version
         run: forge --version
 
-      - name: Initialize Git submodules
-        run: |
-          git submodule update --init --recursive
-
-      - name: Verify dependencies
-        run: |
-          echo "Checking lib directory..."
-          ls -la lib/
-
       - name: Run Forge fmt
         run: forge fmt --check
 
