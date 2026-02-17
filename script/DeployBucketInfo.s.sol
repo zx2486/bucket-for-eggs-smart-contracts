@@ -11,16 +11,11 @@ import {BucketInfo} from "../src/BucketInfo.sol";
  * @dev Reads token and price feed configurations from JSON files based on network
  */
 contract DeployBucketInfo is Script {
-    /// @dev Network configuration structure
+    /// @dev Token configuration structure matching JSON format
     struct TokenConfig {
+        string symbol;
         address tokenAddress;
         address priceFeed;
-        string name;
-    }
-
-    struct NetworkConfig {
-        uint256 platformFee;
-        TokenConfig[] tokens;
     }
 
     /**
@@ -43,15 +38,34 @@ contract DeployBucketInfo is Script {
 
         // Parse configuration
         uint256 platformFee = vm.parseJsonUint(json, ".platformFee");
-        // bytes memory tokensData = vm.parseJson(json, ".tokens");
-        // TokenConfig[] memory tokens = abi.decode(tokensData, (TokenConfig[]));
-        // Parse tokens array - get each element individually
-        uint256 tokenCount = vm.parseJsonKeys(json, ".tokens").length;
+        // Determine array length by attempting to parse indices
+        uint256 tokenCount = 0;
+        for (uint256 i = 0; i < 100; i++) {
+            try vm.parseJsonAddress(json, string.concat(".tokens[", vm.toString(i), "].tokenAddress")) {
+                tokenCount++;
+            } catch {
+                break;
+            }
+        }
+        // Initialize arrays
         address[] memory tokenAddresses = new address[](tokenCount);
         address[] memory priceFeeds = new address[](tokenCount);
 
         console.log("Platform Fee:", platformFee, "basis points");
         console.log("Tokens to configure:", tokenCount);
+        console.log("");
+
+        // Parse each token configuration
+        for (uint256 i = 0; i < tokenCount; i++) {
+            string memory basePath = string.concat(".tokens[", vm.toString(i), "]");
+            string memory symbol = vm.parseJsonString(json, string.concat(basePath, ".symbol"));
+            tokenAddresses[i] = vm.parseJsonAddress(json, string.concat(basePath, ".tokenAddress"));
+            priceFeeds[i] = vm.parseJsonAddress(json, string.concat(basePath, ".priceFeed"));
+            
+            console.log("Token", i, ":", symbol);
+            console.log("  Address:", tokenAddresses[i]);
+            console.log("  Price Feed:", priceFeeds[i]);
+        }
         console.log("");
 
         vm.startBroadcast(deployerPrivateKey);
@@ -66,18 +80,12 @@ contract DeployBucketInfo is Script {
         console.log("Platform fee set to:", platformFee, "basis points");
         console.log("");
 
-        // Configure tokens
+        // Configure tokens and price feeds
         console.log("Configuring tokens and price feeds...");
-        // Build arrays of token addresses and price feeds from the TokenConfig memory array
-        /* address[] memory tokenAddresses = new address[](tokens.length);
-        address[] memory priceFeeds = new address[](tokens.length);
-        for (uint256 i = 0; i < tokens.length; i++) {
-            tokenAddresses[i] = tokens[i].tokenAddress;
-            priceFeeds[i] = tokens[i].priceFeed;
-        }
-        */
         bucketInfo.batchSetTokenWhitelist(tokenAddresses, true);
         bucketInfo.batchSetPriceFeeds(tokenAddresses, priceFeeds);
+        console.log("Successfully configured", tokenCount, "tokens");
+        console.log("");
 
         vm.stopBroadcast();
 

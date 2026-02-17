@@ -231,7 +231,7 @@ contract DefiSwapTest is Test {
 
     function test_Constructor() public view {
         assertEq(address(defiSwap.usdt()), address(usdt));
-        assertEq(defiSwap.weth(), address(weth));
+        assertEq(address(defiSwap.weth()), address(weth));
         assertEq(defiSwap.owner(), owner);
         assertEq(defiSwap.totalUSDTDeposited(), 0);
     }

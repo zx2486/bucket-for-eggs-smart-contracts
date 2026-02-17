@@ -2,29 +2,29 @@
     "platformFee": 100,
     "tokens": [
         {
+            "symbol": "ETH",
             "tokenAddress": "0x0000000000000000000000000000000000000000",
-            "priceFeed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",
-            "name": "ETH"
+            "priceFeed": "0x694AA1769357215DE4FAC081bf1f309aDC325306"
         },
         {
-            "tokenAddress": "0x???4",
-            "priceFeed": "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E",
-            "name": "USDC"
+            "symbol": "USDC",
+            "tokenAddress": "0x759dFFf3E523CFE1dbcB47BA2852C74D0A0bcD47",
+            "priceFeed": "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"
         },
         {
-            "tokenAddress": "0x???2",
-            "priceFeed": "0x14866185B1962B63C3Ea9E03Bc1da838bab34C19",
-            "name": "DAI"
+            "symbol": "DAI",
+            "tokenAddress": "0x8DCDBfaE9e1055309bDeA5813d4952DA86105725",
+            "priceFeed": "0x14866185B1962B63C3Ea9E03Bc1da838bab34C19"
         },
         {
-            "tokenAddress": "0x???1",
-            "priceFeed": "0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43",
-            "name": "WBTC"
+            "symbol": "WBTC",
+            "tokenAddress": "0x55A30865CA659cdF8821a0E02E736B53C2D693Fa",
+            "priceFeed": "0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43"
         },
         {
+            "symbol": "LINK",
             "tokenAddress": "0x6641415a61bCe80D97a715054d1334360Ab833Eb",
-            "priceFeed": "0xc59E3633BAAC79493d908e63626716e204A45EdF",
-            "name": "LINK"
+            "priceFeed": "0xc59E3633BAAC79493d908e63626716e204A45EdF"
         }
     ]
 }

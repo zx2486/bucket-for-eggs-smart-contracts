@@ -8,18 +8,23 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title ISwapRouter
- * @dev Interface for DEX swap routers (Uniswap V3, V4, etc.)
+ * @dev Interface for Uniswap V3 SwapRouter02
  */
 interface ISwapRouter {
-    function exactInputSingle(
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        address recipient,
-        uint256 amountIn,
-        uint256 amountOutMinimum,
-        uint160 sqrtPriceLimitX96
-    ) external payable returns (uint256 amountOut);
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params) 
+        external 
+        payable 
+        returns (uint256 amountOut);
 }
 
 /**
@@ -34,21 +39,41 @@ interface ICurvePool {
 
 /**
  * @title IQuoter
- * @dev Interface for getting quotes from DEXs
+ * @dev Interface for Uniswap V3 QuoterV2
  */
 interface IQuoter {
-    function quoteExactInputSingle(
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountIn,
-        uint160 sqrtPriceLimitX96
-    ) external returns (uint256 amountOut);
+    struct QuoteExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint24 fee;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+        external
+        returns (
+            uint256 amountOut,
+            uint160 sqrtPriceX96After,
+            uint32 initializedTicksCrossed,
+            uint256 gasEstimate
+        );
+}
+
+/**
+ * @title IWETH
+ * @dev Interface for Wrapped Ether
+ */
+interface IWETH {
+    function withdraw(uint256) external;
+    function deposit() external payable;
+    function balanceOf(address) external view returns (uint256);
+    function approve(address, uint256) external returns (bool);
 }
 
 /**
  * @title DefiSwap
- * @dev Contract for depositing USDT and swapping 50% to ETH using the best DEX
+ * @dev Contract for depositing USDT and swapping 50% to native ETH using the best DEX
  * @notice Automatically selects the DEX with the best price from Uniswap V3/V4, Fluid, and Curve
  */
 contract DefiSwap is Ownable, ReentrancyGuard {
@@ -82,8 +107,8 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     /// @dev USDT token contract
     IERC20 public immutable usdt;
 
-    /// @dev WETH token contract (for some DEX interactions)
-    address public immutable weth;
+    /// @dev WETH token contract (needed for Uniswap swaps)
+    IWETH public immutable weth;
 
     /// @dev Total USDT deposited by all users
     uint256 public totalUSDTDeposited;
@@ -124,7 +149,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         require(_weth != address(0), "Invalid WETH address");
 
         usdt = IERC20(_usdt);
-        weth = _weth;
+        weth = IWETH(_weth);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -153,10 +178,10 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Swap 50% of contract's USDT holdings to ETH using the best DEX
+     * @notice Swap 50% of contract's USDT holdings to native ETH using the best DEX
      * @dev Automatically queries all enabled DEXs and uses the one with best price
      * @return usdtSwapped Amount of USDT swapped
-     * @return ethReceived Amount of ETH received
+     * @return ethReceived Amount of native ETH received
      * @return bestDex The DEX that provided the best rate
      */
     function swap() external onlyOwner nonReentrant returns (uint256 usdtSwapped, uint256 ethReceived, DEX bestDex) {
@@ -238,15 +263,21 @@ contract DefiSwap is Ownable, ReentrancyGuard {
      * @notice Get quote from Uniswap-style DEXs (V3, V4, Fluid)
      * @param dex The DEX to query
      * @param amount Amount of USDT
-     * @return quote Expected ETH output
+     * @return quote Expected WETH output
      */
     function getUniswapQuote(DEX dex, uint256 amount) internal returns (uint256 quote) {
         DEXConfig memory config = dexConfigs[dex];
         if (config.quoter == address(0)) return 0;
 
-        try IQuoter(config.quoter).quoteExactInputSingle(address(usdt), weth, config.fee, amount, 0) returns (
-            uint256 amountOut
-        ) {
+        try IQuoter(config.quoter).quoteExactInputSingle(
+            IQuoter.QuoteExactInputSingleParams({
+                tokenIn: address(usdt),
+                tokenOut: address(weth),
+                amountIn: amount,
+                fee: config.fee,
+                sqrtPriceLimitX96: 0
+            })
+        ) returns (uint256 amountOut, uint160, uint32, uint256) {
             return amountOut;
         } catch {
             return 0;
@@ -283,41 +314,49 @@ contract DefiSwap is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Execute swap on Uniswap-style DEX
+     * @notice Execute swap on Uniswap-style DEX (USDT -> WETH -> ETH)
+     * @dev First swaps USDT to WETH via router, then unwraps WETH to native ETH
      */
     function executeSwapUniswap(DEX dex, uint256 amountIn, uint256 minAmountOut) internal {
         DEXConfig memory config = dexConfigs[dex];
         require(config.router != address(0), "Router not configured");
 
-        // Approve router
+        // Approve router to spend USDT
         usdt.forceApprove(config.router, amountIn);
 
-        // Execute swap
-        ISwapRouter(config.router)
-            .exactInputSingle(
-                address(usdt),
-                weth,
-                config.fee,
-                address(this),
-                amountIn,
-                (minAmountOut * 95) / 100, // 5% slippage tolerance
-                0
-            );
+        // Execute swap: USDT -> WETH using struct params
+        uint256 wethReceived = ISwapRouter(config.router).exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(usdt),
+                tokenOut: address(weth),
+                fee: config.fee,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: (minAmountOut * 95) / 100, // 5% slippage tolerance
+                sqrtPriceLimitX96: 0
+            })
+        );
 
-        // Reset approval
+        // Reset USDT approval
         usdt.forceApprove(config.router, 0);
+
+        require(wethReceived > 0, "No WETH received from swap");
+
+        // Unwrap WETH to native ETH
+        weth.withdraw(wethReceived);
     }
 
     /**
-     * @notice Execute swap on Curve
+     * @notice Execute swap on Curve (direct USDT -> native ETH)
      */
     function executeSwapCurve(uint256 amountIn, uint256 minAmountOut) internal {
         require(curvePool != address(0), "Curve pool not configured");
 
-        // Approve pool
+        // Approve pool to spend USDT
         usdt.forceApprove(curvePool, amountIn);
 
         // Execute swap (0 = USDT, 1 = ETH)
+        // Curve returns native ETH directly
         ICurvePool(curvePool)
             .exchange(
                 0,
@@ -326,7 +365,7 @@ contract DefiSwap is Ownable, ReentrancyGuard {
                 (minAmountOut * 95) / 100 // 5% slippage tolerance
             );
 
-        // Reset approval
+        // Reset USDT approval
         usdt.forceApprove(curvePool, 0);
     }
 
