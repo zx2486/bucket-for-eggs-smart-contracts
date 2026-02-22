@@ -3,6 +3,8 @@ pragma solidity ^0.8.33;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
 
 /**
@@ -16,6 +18,8 @@ import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
  * - Platform configuration
  */
 contract BucketInfo is Ownable, Pausable {
+    using SafeERC20 for IERC20;
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -24,6 +28,7 @@ contract BucketInfo is Ownable, Pausable {
     event PriceUpdated(address indexed token, uint256 price);
     event PriceFeedUpdated(address indexed token, address priceFeed);
     event PlatformFeeUpdated(uint256 newFee);
+    event FeesWithdrawn(address indexed tokenAddr, address indexed to, uint256 amount);
 
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
@@ -56,6 +61,9 @@ contract BucketInfo is Ownable, Pausable {
 
     /// @dev Native token (ETH) address representation
     address public constant NATIVE_TOKEN = address(0);
+
+    /// @dev Accumulated fees withdrawn by token address
+    mapping(address => uint256) public accumulatedFeesWithdrawn;
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -319,5 +327,38 @@ contract BucketInfo is Ownable, Pausable {
      */
     function isTokenValid(address token) external view returns (bool) {
         return isWhitelisted[token] && !paused();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        FEE WITHDRAWAL
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Withdraw accumulated fees (ERC-20 tokens) collected from Bucket contracts
+     * @param to Recipient address
+     * @param tokenAddr Token address to withdraw (the bucket share tokens)
+     * @param amount Amount of tokens to withdraw
+     */
+    function withdrawAccumulatedFees(address to, address tokenAddr, uint256 amount) external onlyOwner {
+        require(to != address(0), "Invalid recipient");
+        require(amount > 0, "Amount must be greater than 0");
+
+        IERC20(tokenAddr).safeTransfer(to, amount);
+        accumulatedFeesWithdrawn[tokenAddr] += amount;
+
+        emit FeesWithdrawn(tokenAddr, to, amount);
+    }
+
+    function withdrawAccumulatedETHFees(address payable to, uint256 amount) external onlyOwner {
+        require(to != address(0), "Invalid recipient");
+        require(amount > 0, "Amount must be greater than 0");
+        require(address(this).balance >= amount, "Insufficient ETH balance");
+
+        (bool success,) = to.call{value: amount}("");
+        require(success, "ETH transfer failed");
+
+        accumulatedFeesWithdrawn[NATIVE_TOKEN] += amount;
+
+        emit FeesWithdrawn(NATIVE_TOKEN, to, amount);
     }
 }
