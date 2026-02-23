@@ -24,12 +24,7 @@ contract PureMembershipFactory {
     /// @param owner Owner of the new membership contract
     /// @param bucketInfo BucketInfo contract wired to this instance
     /// @param uri ERC-1155 metadata URI
-    event PureMembershipCreated(
-        address indexed proxy,
-        address indexed owner,
-        address indexed bucketInfo,
-        string uri
-    );
+    event PureMembershipCreated(address indexed proxy, address indexed owner, address indexed bucketInfo, string uri);
 
     error InvalidImplementation();
     error InvalidBucketInfo();
@@ -61,10 +56,7 @@ contract PureMembershipFactory {
         if (bucketInfoAddr == address(0)) revert InvalidBucketInfo();
 
         // Encode the initializer call
-        bytes memory initData = abi.encodeCall(
-            PureMembership.initialize,
-            (configs, bucketInfoAddr, uri)
-        );
+        bytes memory initData = abi.encodeCall(PureMembership.initialize, (configs, bucketInfoAddr, uri));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = address(new ERC1967Proxy(implementation, initData));

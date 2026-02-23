@@ -42,8 +42,13 @@ contract MockBucketInfoForFactory {
         return whitelistedList;
     }
 
-    function PRICE_DECIMALS() external pure returns (uint256) { return 8; }
-    function platformFee() external view returns (uint256) { return feeRate; }
+    function PRICE_DECIMALS() external pure returns (uint256) {
+        return 8;
+    }
+
+    function platformFee() external view returns (uint256) {
+        return feeRate;
+    }
 
     function addToken(address token, uint256 price) external {
         if (!whitelisted[token]) {
@@ -53,7 +58,9 @@ contract MockBucketInfoForFactory {
         prices[token] = price;
     }
 
-    function setOperational(bool _operational) external { operational = _operational; }
+    function setOperational(bool _operational) external {
+        operational = _operational;
+    }
 
     receive() external payable {}
 }
@@ -74,22 +81,17 @@ contract PureMembershipFactoryTest is Test {
     string constant URI = "https://api.example.com/metadata/{id}.json";
 
     // Shared config constants
-    uint256 constant BASIC_ID       = 1;
-    uint256 constant BASIC_LEVEL    = 1;
-    uint256 constant BASIC_PRICE    = 10e8;
+    uint256 constant BASIC_ID = 1;
+    uint256 constant BASIC_LEVEL = 1;
+    uint256 constant BASIC_PRICE = 10e8;
     uint256 constant BASIC_DURATION = 30 days;
 
-    uint256 constant PREMIUM_ID       = 2;
-    uint256 constant PREMIUM_LEVEL    = 2;
-    uint256 constant PREMIUM_PRICE    = 50e8;
+    uint256 constant PREMIUM_ID = 2;
+    uint256 constant PREMIUM_LEVEL = 2;
+    uint256 constant PREMIUM_PRICE = 50e8;
     uint256 constant PREMIUM_DURATION = 365 days;
 
-    event PureMembershipCreated(
-        address indexed proxy,
-        address indexed owner,
-        address indexed bucketInfo,
-        string uri
-    );
+    event PureMembershipCreated(address indexed proxy, address indexed owner, address indexed bucketInfo, string uri);
 
     // -------------------------------------------------------
     //  Helpers
@@ -98,9 +100,9 @@ contract PureMembershipFactoryTest is Test {
     /// @dev Returns a 3-element config array (Basic / Premium / VIP)
     function _defaultConfigs() internal pure returns (PureMembership.MembershipConfig[] memory configs) {
         configs = new PureMembership.MembershipConfig[](3);
-        configs[0] = PureMembership.MembershipConfig(1, 1, "Basic",   10e8,  30 days);
-        configs[1] = PureMembership.MembershipConfig(2, 2, "Premium", 50e8,  365 days);
-        configs[2] = PureMembership.MembershipConfig(3, 3, "VIP",     200e8, 365 days);
+        configs[0] = PureMembership.MembershipConfig(1, 1, "Basic", 10e8, 30 days);
+        configs[1] = PureMembership.MembershipConfig(2, 2, "Premium", 50e8, 365 days);
+        configs[2] = PureMembership.MembershipConfig(3, 3, "VIP", 200e8, 365 days);
     }
 
     // -------------------------------------------------------
@@ -109,12 +111,12 @@ contract PureMembershipFactoryTest is Test {
 
     function setUp() public {
         deployer = address(this);
-        alice    = makeAddr("alice");
-        bob      = makeAddr("bob");
+        alice = makeAddr("alice");
+        bob = makeAddr("bob");
 
-        bucketInfo     = new MockBucketInfoForFactory();
+        bucketInfo = new MockBucketInfoForFactory();
         implementation = new PureMembership();
-        factory        = new PureMembershipFactory(address(implementation));
+        factory = new PureMembershipFactory(address(implementation));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -181,14 +183,14 @@ contract PureMembershipFactoryTest is Test {
 
         PureMembership.MembershipConfig memory basic = pm.getMembershipInfo(BASIC_ID);
         assertEq(basic.tokenId, BASIC_ID);
-        assertEq(basic.level,   BASIC_LEVEL);
-        assertEq(basic.price,   BASIC_PRICE);
+        assertEq(basic.level, BASIC_LEVEL);
+        assertEq(basic.price, BASIC_PRICE);
         assertEq(basic.duration, BASIC_DURATION);
 
         PureMembership.MembershipConfig memory premium = pm.getMembershipInfo(PREMIUM_ID);
         assertEq(premium.tokenId, PREMIUM_ID);
-        assertEq(premium.level,   PREMIUM_LEVEL);
-        assertEq(premium.price,   PREMIUM_PRICE);
+        assertEq(premium.level, PREMIUM_LEVEL);
+        assertEq(premium.price, PREMIUM_PRICE);
         assertEq(premium.duration, PREMIUM_DURATION);
     }
 
@@ -328,7 +330,7 @@ contract PureMembershipFactoryTest is Test {
         MockBucketInfoForFactory bucketInfo2 = new MockBucketInfoForFactory();
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address proxy1 = factory.createPureMembership(configs, address(bucketInfo),  URI);
+        address proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
         address proxy2 = factory.createPureMembership(configs, address(bucketInfo2), URI);
 
         assertEq(address(PureMembership(proxy1).bucketInfo()), address(bucketInfo));

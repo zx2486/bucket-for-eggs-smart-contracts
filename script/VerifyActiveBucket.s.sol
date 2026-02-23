@@ -17,7 +17,7 @@ import {ActiveBucketFactory} from "../src/ActiveBucketFactory.sol";
  */
 contract VerifyActiveBucket is Script {
     function run() external view {
-        address proxyAddr   = vm.envAddress("ACTIVE_BUCKET_PROXY_ADDRESS");
+        address proxyAddr = vm.envAddress("ACTIVE_BUCKET_PROXY_ADDRESS");
         address factoryAddr = vm.envOr("ACTIVE_BUCKET_FACTORY_ADDRESS", address(0));
 
         ActiveBucket ab = ActiveBucket(payable(proxyAddr));
@@ -85,7 +85,7 @@ contract VerifyActiveBucket is Script {
         result[0] = "0";
         result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
-            result[2 + i * 2]     = hexChars[uint8(data[i] >> 4)];
+            result[2 + i * 2] = hexChars[uint8(data[i] >> 4)];
             result[2 + i * 2 + 1] = hexChars[uint8(data[i] & 0x0f)];
         }
         return string(result);

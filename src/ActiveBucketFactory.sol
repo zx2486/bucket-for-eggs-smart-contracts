@@ -21,11 +21,7 @@ contract ActiveBucketFactory {
 
     /// @notice Emitted when a new ActiveBucket proxy is deployed
     event ActiveBucketCreated(
-        address indexed proxy,
-        address indexed owner,
-        address indexed bucketInfo,
-        string name,
-        string symbol
+        address indexed proxy, address indexed owner, address indexed bucketInfo, string name, string symbol
     );
 
     error InvalidImplementation();
@@ -61,10 +57,7 @@ contract ActiveBucketFactory {
         if (oneInchRouter == address(0)) revert InvalidOneInchRouter();
 
         // Encode the initializer call
-        bytes memory initData = abi.encodeCall(
-            ActiveBucket.initialize,
-            (bucketInfoAddr, oneInchRouter, name, symbol)
-        );
+        bytes memory initData = abi.encodeCall(ActiveBucket.initialize, (bucketInfoAddr, oneInchRouter, name, symbol));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = address(new ERC1967Proxy(implementation, initData));

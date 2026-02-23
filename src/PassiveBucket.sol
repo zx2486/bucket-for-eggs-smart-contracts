@@ -3,7 +3,9 @@ pragma solidity ^0.8.33;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {ERC20BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
+import {
+    ERC20BurnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -30,9 +32,7 @@ interface ISwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(
-        ExactInputSingleParams calldata params
-    ) external payable returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 }
 
 /**
@@ -48,16 +48,9 @@ interface IQuoter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function quoteExactInputSingle(
-        QuoteExactInputSingleParams memory params
-    )
+    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
         external
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 }
 
 /**
@@ -178,18 +171,10 @@ contract PassiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     event Deposited(
-        address indexed user,
-        address indexed token,
-        uint256 amount,
-        uint256 sharesMinted,
-        uint256 depositValueUSD
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
     );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
-    event TokenReturned(
-        address indexed user,
-        address indexed token,
-        uint256 amount
-    );
+    event TokenReturned(address indexed user, address indexed token, uint256 amount);
     event BucketDistributionsUpdated(BucketDistribution[] distributions);
     event SwapPauseChanged(bool paused);
     event Rebalanced(
@@ -199,27 +184,10 @@ contract PassiveBucket is
         uint256 totalValueAfter,
         uint256 newTokenPrice
     );
-    event RebalanceFeeDistributed(
-        address indexed recipient,
-        uint256 sharesMinted,
-        uint256 feeValueUSD
-    );
-    event OwnerPenaltyBurned(
-        address indexed owner,
-        uint256 sharesBurned,
-        uint256 penaltyValueUSD
-    );
-    event TokensRecovered(
-        address indexed token,
-        address indexed to,
-        uint256 amount
-    );
-    event DEXConfigured(
-        uint8 indexed dexId,
-        address router,
-        address quoter,
-        bool enabled
-    );
+    event RebalanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUSD);
+    event OwnerPenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUSD);
+    event TokensRecovered(address indexed token, address indexed to, uint256 amount);
+    event DEXConfigured(uint8 indexed dexId, address router, address quoter, bool enabled);
     event WETHUpdated(address indexed weth);
     event RebalanceFeesUpdated(uint256 ownerFeeBps, uint256 callerFeeBps);
 
@@ -252,8 +220,9 @@ contract PassiveBucket is
 
     /// @notice Ensures the platform is operational
     modifier whenPlatformOperational() {
-        if (!bucketInfo.isPlatformOperational())
+        if (!bucketInfo.isPlatformOperational()) {
             revert PlatformNotOperational();
+        }
         _;
     }
 
@@ -326,10 +295,13 @@ contract PassiveBucket is
      * @param token The token address (address(0) for ETH)
      * @param amount The amount to deposit (ignored for ETH; msg.value is used)
      */
-    function deposit(
-        address token,
-        uint256 amount
-    ) external payable nonReentrant whenNotPaused whenPlatformOperational {
+    function deposit(address token, uint256 amount)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        whenPlatformOperational
+    {
         if (!bucketInfo.isTokenValid(token)) revert InvalidToken(token);
 
         uint256 actualAmount;
@@ -337,11 +309,7 @@ contract PassiveBucket is
             actualAmount = msg.value;
         } else {
             actualAmount = amount;
-            IERC20(token).safeTransferFrom(
-                msg.sender,
-                address(this),
-                actualAmount
-            );
+            IERC20(token).safeTransferFrom(msg.sender, address(this), actualAmount);
         }
         if (actualAmount == 0) revert ZeroAmount();
 
@@ -363,13 +331,7 @@ contract PassiveBucket is
         totalDepositValue += depositValue;
         _mint(msg.sender, sharesToMint);
 
-        emit Deposited(
-            msg.sender,
-            token,
-            actualAmount,
-            sharesToMint,
-            depositValue
-        );
+        emit Deposited(msg.sender, token, actualAmount, sharesToMint, depositValue);
     }
 
     /**
@@ -378,11 +340,10 @@ contract PassiveBucket is
      *      Returns tokens based on actual contract holdings proportional to share ownership.
      * @param shares The number of share tokens to redeem
      */
-    function redeem(
-        uint256 shares
-    ) external nonReentrant whenNotPaused whenPlatformOperational {
-        if (shares == 0 || shares > balanceOf(msg.sender))
+    function redeem(uint256 shares) external nonReentrant whenNotPaused whenPlatformOperational {
+        if (shares == 0 || shares > balanceOf(msg.sender)) {
             revert InvalidRedeemAmount();
+        }
 
         // Owner accountability check (before)
         bool isOwnerCaller = (msg.sender == owner());
@@ -413,11 +374,7 @@ contract PassiveBucket is
         for (uint256 i = 0; i < len; i++) {
             if (returnAmounts[i] > 0) {
                 _transferToken(returnTokens[i], msg.sender, returnAmounts[i]);
-                emit TokenReturned(
-                    msg.sender,
-                    returnTokens[i],
-                    returnAmounts[i]
-                );
+                emit TokenReturned(msg.sender, returnTokens[i], returnAmounts[i]);
             }
         }
 
@@ -437,9 +394,11 @@ contract PassiveBucket is
      * @notice Update the bucket distributions (owner only, must be accountable)
      * @param distributions The new bucket distributions
      */
-    function updateBucketDistributions(
-        BucketDistribution[] calldata distributions
-    ) external onlyAccountableOwner whenPlatformOperational {
+    function updateBucketDistributions(BucketDistribution[] calldata distributions)
+        external
+        onlyAccountableOwner
+        whenPlatformOperational
+    {
         _validateAndStoreDistributions(distributions);
     }
 
@@ -447,11 +406,7 @@ contract PassiveBucket is
      * @notice Returns the current bucket distributions
      * @return Array of BucketDistribution structs
      */
-    function getBucketDistributions()
-        external
-        view
-        returns (BucketDistribution[] memory)
-    {
+    function getBucketDistributions() external view returns (BucketDistribution[] memory) {
         return _bucketDistributions;
     }
 
@@ -483,13 +438,7 @@ contract PassiveBucket is
      *      callerFeeBps to caller (minted as shares), and a penalty burned from owner on
      *      value decrease.
      */
-    function rebalanceByDefi()
-        external
-        nonReentrant
-        whenNotPaused
-        whenSwapNotPaused
-        whenPlatformOperational
-    {
+    function rebalanceByDefi() external nonReentrant whenNotPaused whenSwapNotPaused whenPlatformOperational {
         if (balanceOf(msg.sender) == 0) revert InsufficientShares();
 
         uint256 totalValueBefore = _calculateTotalValue();
@@ -511,8 +460,7 @@ contract PassiveBucket is
             for (uint256 i = 0; i < len; i++) {
                 address token = _bucketDistributions[i].token;
                 uint256 currentValueUSD = _getTokenValue(token);
-                uint256 targetValueUSD = (totalValueBefore *
-                    _bucketDistributions[i].weight) / WEIGHT_SUM;
+                uint256 targetValueUSD = (totalValueBefore * _bucketDistributions[i].weight) / WEIGHT_SUM;
 
                 if (currentValueUSD > targetValueUSD) {
                     // Overweight: convert excess USD value into token units to sell
@@ -540,15 +488,9 @@ contract PassiveBucket is
             if (totalDeficit > 0) {
                 for (uint256 i = 0; i < sellCount; i++) {
                     for (uint256 j = 0; j < buyCount; j++) {
-                        uint256 amountToSell = (sellAmounts[i] *
-                            buyDeficits[j]) / totalDeficit;
+                        uint256 amountToSell = (sellAmounts[i] * buyDeficits[j]) / totalDeficit;
                         if (amountToSell > 0) {
-                            _executeBestSwap(
-                                sellTokens[i],
-                                buyTokens[j],
-                                amountToSell,
-                                0
-                            );
+                            _executeBestSwap(sellTokens[i], buyTokens[j], amountToSell, 0);
                         }
                     }
                 }
@@ -559,8 +501,7 @@ contract PassiveBucket is
         uint256 totalValueAfter = _calculateTotalValue();
         // Check value loss < 0.5%
         if (totalValueAfter < totalValueBefore) {
-            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) /
-                BPS_DENOMINATOR;
+            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) / BPS_DENOMINATOR;
             if (totalValueBefore - totalValueAfter > maxLoss) {
                 revert ValueLossTooHigh(totalValueBefore, totalValueAfter);
             }
@@ -570,19 +511,10 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfter,
-            rebalanceOwnerFeeBps,
-            rebalanceCallerFeeBps
+            beforeTokenPrice * tokenTotalSupply, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(
-            msg.sender,
-            totalValueBefore,
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfter,
-            tokenPrice
-        );
+        emit Rebalanced(msg.sender, totalValueBefore, beforeTokenPrice * tokenTotalSupply, totalValueAfter, tokenPrice);
     }
 
     /**
@@ -591,9 +523,7 @@ contract PassiveBucket is
      *      Fees: 2% of increase to owner, 2% to caller.
      * @param swapCalldata The encoded calldata for the 1inch router
      */
-    function rebalanceBy1inch(
-        bytes calldata swapCalldata
-    )
+    function rebalanceBy1inch(bytes calldata swapCalldata)
         external
         nonReentrant
         whenNotPaused
@@ -606,15 +536,14 @@ contract PassiveBucket is
         uint256 beforeTokenPrice = tokenPrice;
 
         // Execute swap via 1inch
-        (bool success, ) = oneInchRouter.call(swapCalldata);
+        (bool success,) = oneInchRouter.call(swapCalldata);
         if (!success) revert SwapFailed();
 
         uint256 totalValueAfter = _calculateTotalValue();
 
         // Check value loss < 0.5%
         if (totalValueAfter < totalValueBefore) {
-            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) /
-                BPS_DENOMINATOR;
+            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) / BPS_DENOMINATOR;
             if (totalValueBefore - totalValueAfter > maxLoss) {
                 revert ValueLossTooHigh(totalValueBefore, totalValueAfter);
             }
@@ -625,19 +554,10 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfter,
-            rebalanceOwnerFeeBps,
-            rebalanceCallerFeeBps
+            beforeTokenPrice * tokenTotalSupply, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(
-            msg.sender,
-            totalValueBefore,
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfter,
-            tokenPrice
-        );
+        emit Rebalanced(msg.sender, totalValueBefore, beforeTokenPrice * tokenTotalSupply, totalValueAfter, tokenPrice);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -678,14 +598,11 @@ contract PassiveBucket is
      * @param amount The amount to recover
      * @param to The recipient address
      */
-    function recoverTokens(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyOwner {
+    function recoverTokens(address token, uint256 amount, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        if (bucketInfo.isTokenWhitelisted(token))
+        if (bucketInfo.isTokenWhitelisted(token)) {
             revert CannotRecoverWhitelistedToken(token);
+        }
 
         _transferToken(token, to, amount);
 
@@ -700,19 +617,8 @@ contract PassiveBucket is
      * @param fee Fee tier (for Uniswap-style DEXs)
      * @param enabled Whether the DEX is enabled
      */
-    function configureDEX(
-        uint8 dexId,
-        address router,
-        address quoter,
-        uint24 fee,
-        bool enabled
-    ) external onlyOwner {
-        dexConfigs[dexId] = DEXConfig({
-            router: router,
-            quoter: quoter,
-            fee: fee,
-            enabled: enabled
-        });
+    function configureDEX(uint8 dexId, address router, address quoter, uint24 fee, bool enabled) external onlyOwner {
+        dexConfigs[dexId] = DEXConfig({router: router, quoter: quoter, fee: fee, enabled: enabled});
         if (dexId >= dexCount) {
             dexCount = dexId + 1;
         }
@@ -734,14 +640,8 @@ contract PassiveBucket is
      * @param _ownerFeeBps  Owner fee in basis points (e.g., 300 = 3%)
      * @param _callerFeeBps Caller fee in basis points (e.g., 100 = 1%)
      */
-    function setRebalanceFees(
-        uint256 _ownerFeeBps,
-        uint256 _callerFeeBps
-    ) external onlyOwner {
-        require(
-            _ownerFeeBps + _callerFeeBps <= BPS_DENOMINATOR,
-            "Fees exceed 100%"
-        );
+    function setRebalanceFees(uint256 _ownerFeeBps, uint256 _callerFeeBps) external onlyOwner {
+        require(_ownerFeeBps + _callerFeeBps <= BPS_DENOMINATOR, "Fees exceed 100%");
         rebalanceOwnerFeeBps = _ownerFeeBps;
         rebalanceCallerFeeBps = _callerFeeBps;
         emit RebalanceFeesUpdated(_ownerFeeBps, _callerFeeBps);
@@ -775,9 +675,7 @@ contract PassiveBucket is
      * @dev Validate and store bucket distributions
      * @param distributions The distributions to validate and store
      */
-    function _validateAndStoreDistributions(
-        BucketDistribution[] calldata distributions
-    ) internal {
+    function _validateAndStoreDistributions(BucketDistribution[] calldata distributions) internal {
         if (distributions.length == 0) revert EmptyDistributions();
 
         uint256 totalWeight = 0;
@@ -829,10 +727,7 @@ contract PassiveBucket is
     /**
      * @dev Calculate the USD value of a given number of shares
      */
-    function _calculateValueOfShares(
-        uint256 shares,
-        uint256 supply
-    ) internal view returns (uint256) {
+    function _calculateValueOfShares(uint256 shares, uint256 supply) internal view returns (uint256) {
         if (supply == 0) return 0;
         return (_calculateTotalValue() * shares) / supply;
     }
@@ -873,13 +768,9 @@ contract PassiveBucket is
     /**
      * @dev Transfer token or ETH to a recipient
      */
-    function _transferToken(
-        address token,
-        address to,
-        uint256 amount
-    ) internal {
+    function _transferToken(address token, address to, uint256 amount) internal {
         if (token == address(0)) {
-            (bool success, ) = to.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
@@ -893,12 +784,7 @@ contract PassiveBucket is
     /**
      * @dev Execute a swap using the best available DEX (queries all configured DEXs)
      */
-    function _executeBestSwap(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 minAmountOut
-    ) internal {
+    function _executeBestSwap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut) internal {
         // Handle ETH → WETH wrapping if needed
         address actualTokenIn = tokenIn;
         address actualTokenOut = tokenOut;
@@ -921,8 +807,8 @@ contract PassiveBucket is
             DEXConfig memory config = dexConfigs[i];
             if (!config.enabled || config.quoter == address(0)) continue;
 
-            try
-                IQuoter(config.quoter).quoteExactInputSingle(
+            try IQuoter(config.quoter)
+                .quoteExactInputSingle(
                     IQuoter.QuoteExactInputSingleParams({
                         tokenIn: actualTokenIn,
                         tokenOut: actualTokenOut,
@@ -930,8 +816,9 @@ contract PassiveBucket is
                         fee: config.fee,
                         sqrtPriceLimitX96: 0
                     })
-                )
-            returns (uint256 amountOut, uint160, uint32, uint256) {
+                ) returns (
+                uint256 amountOut, uint160, uint32, uint256
+            ) {
                 if (amountOut > bestQuote) {
                     bestQuote = amountOut;
                     bestDex = i;
@@ -945,17 +832,18 @@ contract PassiveBucket is
         DEXConfig memory config = dexConfigs[bestDex];
         IERC20(actualTokenIn).forceApprove(config.router, amountIn);
 
-        ISwapRouter(config.router).exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: actualTokenIn,
-                tokenOut: actualTokenOut,
-                fee: config.fee,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: (minAmountOut * 95) / 100,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        ISwapRouter(config.router)
+            .exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: actualTokenIn,
+                    tokenOut: actualTokenOut,
+                    fee: config.fee,
+                    recipient: address(this),
+                    amountIn: amountIn,
+                    amountOutMinimum: (minAmountOut * 95) / 100,
+                    sqrtPriceLimitX96: 0
+                })
+            );
 
         IERC20(actualTokenIn).forceApprove(config.router, 0);
 
@@ -986,8 +874,8 @@ contract PassiveBucket is
             uint256 targetWeight = _bucketDistributions[i].weight;
 
             if (
-                actualWeight + DISTRIBUTION_TOLERANCE < targetWeight ||
-                actualWeight > targetWeight + DISTRIBUTION_TOLERANCE
+                actualWeight + DISTRIBUTION_TOLERANCE < targetWeight
+                    || actualWeight > targetWeight + DISTRIBUTION_TOLERANCE
             ) {
                 return false;
             }
@@ -1010,14 +898,10 @@ contract PassiveBucket is
 
             // Allow DISTRIBUTION_TOLERANCE% deviation
             if (
-                actualWeight + DISTRIBUTION_TOLERANCE < targetWeight ||
-                actualWeight > targetWeight + DISTRIBUTION_TOLERANCE
+                actualWeight + DISTRIBUTION_TOLERANCE < targetWeight
+                    || actualWeight > targetWeight + DISTRIBUTION_TOLERANCE
             ) {
-                revert DistributionMismatch(
-                    _bucketDistributions[i].token,
-                    actualWeight,
-                    targetWeight
-                );
+                revert DistributionMismatch(_bucketDistributions[i].token, actualWeight, targetWeight);
             }
         }
     }
@@ -1050,47 +934,31 @@ contract PassiveBucket is
             // Platform fee to BucketInfo
             uint256 platformFeeValue = bucketInfo.calculateFee(increase);
             if (platformFeeValue > 0 && newPrice > 0) {
-                uint256 platformShares = (platformFeeValue * PRECISION) /
-                    newPrice;
+                uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
                 if (platformShares > 0) {
                     _mint(address(bucketInfo), platformShares);
-                    emit RebalanceFeeDistributed(
-                        address(bucketInfo),
-                        platformShares,
-                        platformFeeValue
-                    );
+                    emit RebalanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
                 }
             }
 
             if (accountable) {
                 // Owner fee
-                uint256 ownerFeeValue = (increase * ownerFeeBps) /
-                    BPS_DENOMINATOR;
+                uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
                 if (ownerFeeValue > 0 && newPrice > 0) {
-                    uint256 ownerShares = (ownerFeeValue * PRECISION) /
-                        newPrice;
+                    uint256 ownerShares = (ownerFeeValue * PRECISION) / newPrice;
                     if (ownerShares > 0) {
                         _mint(owner(), ownerShares);
-                        emit RebalanceFeeDistributed(
-                            owner(),
-                            ownerShares,
-                            ownerFeeValue
-                        );
+                        emit RebalanceFeeDistributed(owner(), ownerShares, ownerFeeValue);
                     }
                 }
             }
             // Caller fee
-            uint256 callerFeeValue = (increase * callerFeeBps) /
-                BPS_DENOMINATOR;
+            uint256 callerFeeValue = (increase * callerFeeBps) / BPS_DENOMINATOR;
             if (callerFeeValue > 0 && newPrice > 0) {
                 uint256 callerShares = (callerFeeValue * PRECISION) / newPrice;
                 if (callerShares > 0) {
                     _mint(msg.sender, callerShares);
-                    emit RebalanceFeeDistributed(
-                        msg.sender,
-                        callerShares,
-                        callerFeeValue
-                    );
+                    emit RebalanceFeeDistributed(msg.sender, callerShares, callerFeeValue);
                 }
             }
         } else if (totalValueAfter < totalValueBefore) {
@@ -1098,13 +966,9 @@ contract PassiveBucket is
 
             // Owner bears 4% of decrease (burned from owner shares)
             if (accountable) {
-                uint256 penaltyValue = (decrease *
-                    (callerFeeBps + ownerFeeBps)) / BPS_DENOMINATOR;
-                uint256 currentPrice = tokenPrice > 0
-                    ? tokenPrice
-                    : INITIAL_TOKEN_PRICE;
-                uint256 sharesToBurn = (penaltyValue * PRECISION) /
-                    currentPrice;
+                uint256 penaltyValue = (decrease * (callerFeeBps + ownerFeeBps)) / BPS_DENOMINATOR;
+                uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
+                uint256 sharesToBurn = (penaltyValue * PRECISION) / currentPrice;
                 uint256 ownerBalance = balanceOf(owner());
 
                 if (sharesToBurn > ownerBalance) {
@@ -1112,20 +976,13 @@ contract PassiveBucket is
                 }
                 if (sharesToBurn > 0) {
                     _burn(owner(), sharesToBurn);
-                    emit OwnerPenaltyBurned(
-                        owner(),
-                        sharesToBurn,
-                        penaltyValue
-                    );
+                    emit OwnerPenaltyBurned(owner(), sharesToBurn, penaltyValue);
                 }
             }
         }
 
         // Update token price to reflect new state
-        return
-            (totalSupply() > 0)
-                ? INITIAL_TOKEN_PRICE
-                : (_calculateTotalValue() * PRECISION) / totalSupply();
+        return (totalSupply() > 0) ? INITIAL_TOKEN_PRICE : (_calculateTotalValue() * PRECISION) / totalSupply();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1133,9 +990,7 @@ contract PassiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     /// @dev Authorize upgrade (owner only)
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /*//////////////////////////////////////////////////////////////
                         RECEIVE ETH

@@ -57,13 +57,7 @@ contract MockERC20Factory {
         proxy = implementation.clone();
 
         // Initialize the proxy
-        MockERC20Upgradeable(proxy).initialize(
-            name_,
-            symbol_,
-            decimals_,
-            initialSupply_,
-            recipient_
-        );
+        MockERC20Upgradeable(proxy).initialize(name_, symbol_, decimals_, initialSupply_, recipient_);
 
         // Track deployed proxy
         deployedProxies.push(proxy);
@@ -95,13 +89,7 @@ contract MockERC20Factory {
         proxy = implementation.cloneDeterministic(salt_);
 
         // Initialize the proxy
-        MockERC20Upgradeable(proxy).initialize(
-            name_,
-            symbol_,
-            decimals_,
-            initialSupply_,
-            recipient_
-        );
+        MockERC20Upgradeable(proxy).initialize(name_, symbol_, decimals_, initialSupply_, recipient_);
 
         // Track deployed proxy
         deployedProxies.push(proxy);

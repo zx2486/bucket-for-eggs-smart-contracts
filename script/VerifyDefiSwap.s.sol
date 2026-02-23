@@ -34,7 +34,7 @@ contract VerifyDefiSwap is Script {
 
         // DEX configurations
         console.log("=== DEX Configurations ===");
-        
+
         // Uniswap V3
         DefiSwap.DEXConfig memory v3Config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V3);
         console.log("Uniswap V3:");

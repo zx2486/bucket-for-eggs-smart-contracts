@@ -44,8 +44,13 @@ contract MockBucketInfoForActive {
         return whitelistedList;
     }
 
-    function PRICE_DECIMALS() external pure returns (uint256) { return 8; }
-    function platformFee() external view returns (uint256) { return feeRate; }
+    function PRICE_DECIMALS() external pure returns (uint256) {
+        return 8;
+    }
+
+    function platformFee() external view returns (uint256) {
+        return feeRate;
+    }
 
     function addToken(address token, uint256 price) external {
         if (!whitelisted[token]) {
@@ -121,13 +126,7 @@ contract MockFlashLoanReceiver is IFlashLoanReceiver {
         shouldRepay = _shouldRepay;
     }
 
-    function onFlashLoan(
-        address,
-        address token,
-        uint256 amount,
-        uint256 fee,
-        bytes calldata
-    ) external override {
+    function onFlashLoan(address, address token, uint256 amount, uint256 fee, bytes calldata) external override {
         if (!shouldRepay) return;
 
         uint256 totalOwed = amount + fee;
@@ -192,13 +191,8 @@ contract ActiveBucketTest is Test {
 
         implementation = new ActiveBucket();
 
-        bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector,
-            address(bucketInfo),
-            oneInchRouter,
-            NAME,
-            SYMBOL
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, NAME, SYMBOL);
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         bucket = ActiveBucket(payable(address(proxy)));
 
@@ -228,13 +222,8 @@ contract ActiveBucketTest is Test {
         ActiveBucket impl = new ActiveBucket();
 
         vm.expectRevert(ActiveBucket.ZeroAddress.selector);
-        bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector,
-            address(0),
-            oneInchRouter,
-            NAME,
-            SYMBOL
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(0), oneInchRouter, NAME, SYMBOL);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -242,13 +231,8 @@ contract ActiveBucketTest is Test {
         ActiveBucket impl = new ActiveBucket();
 
         vm.expectRevert(ActiveBucket.ZeroAddress.selector);
-        bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector,
-            address(bucketInfo),
-            address(0),
-            NAME,
-            SYMBOL
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), address(0), NAME, SYMBOL);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -260,11 +244,7 @@ contract ActiveBucketTest is Test {
     function test_InitializeCustomNameAndSymbol() public {
         ActiveBucket impl = new ActiveBucket();
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector,
-            address(bucketInfo),
-            oneInchRouter,
-            "My Active Bucket",
-            "MAB"
+            ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, "My Active Bucket", "MAB"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         ActiveBucket customBucket = ActiveBucket(payable(address(proxy)));
@@ -660,16 +640,12 @@ contract ActiveBucketTest is Test {
 
     function test_RecoverETH() public {
         // ETH is whitelisted in our setup, so this should revert
-        vm.expectRevert(
-            abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(0))
-        );
+        vm.expectRevert(abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(0)));
         bucket.recoverTokens(address(0), 1 ether, user1);
     }
 
     function test_RevertRecoverWhitelistedToken() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA))
-        );
+        vm.expectRevert(abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA)));
         bucket.recoverTokens(address(tokenA), 100e18, user1);
     }
 

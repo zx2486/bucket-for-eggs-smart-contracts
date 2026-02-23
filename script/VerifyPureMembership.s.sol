@@ -17,7 +17,7 @@ import {PureMembershipFactory} from "../src/PureMembershipFactory.sol";
  */
 contract VerifyPureMembership is Script {
     function run() external view {
-        address proxyAddr   = vm.envAddress("PURE_MEMBERSHIP_PROXY_ADDRESS");
+        address proxyAddr = vm.envAddress("PURE_MEMBERSHIP_PROXY_ADDRESS");
         address factoryAddr = vm.envOr("PURE_MEMBERSHIP_FACTORY_ADDRESS", address(0));
 
         PureMembership pm = PureMembership(proxyAddr);
@@ -95,7 +95,7 @@ contract VerifyPureMembership is Script {
         result[0] = "0";
         result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
-            result[2 + i * 2]     = hex_chars[uint8(data[i] >> 4)];
+            result[2 + i * 2] = hex_chars[uint8(data[i] >> 4)];
             result[2 + i * 2 + 1] = hex_chars[uint8(data[i] & 0x0f)];
         }
         return string(result);

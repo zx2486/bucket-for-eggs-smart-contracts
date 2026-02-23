@@ -61,7 +61,7 @@ contract DeployBucketInfo is Script {
             string memory symbol = vm.parseJsonString(json, string.concat(basePath, ".symbol"));
             tokenAddresses[i] = vm.parseJsonAddress(json, string.concat(basePath, ".tokenAddress"));
             priceFeeds[i] = vm.parseJsonAddress(json, string.concat(basePath, ".priceFeed"));
-            
+
             console.log("Token", i, ":", symbol);
             console.log("  Address:", tokenAddresses[i]);
             console.log("  Price Feed:", priceFeeds[i]);

@@ -18,7 +18,7 @@ contract DeployActiveBucketSepolia is Script {
     address constant ONEINCH_ROUTER_V6 = 0x111111125421cA6dc452d289314280a0f8842A65;
 
     // ERC-20 share token metadata
-    string constant TOKEN_NAME   = "Active Bucket Share";
+    string constant TOKEN_NAME = "Active Bucket Share";
     string constant TOKEN_SYMBOL = "aBKT";
 
     function run() external {
@@ -48,12 +48,7 @@ contract DeployActiveBucketSepolia is Script {
 
         // Step 3: Create an ActiveBucket proxy via the factory
         console.log("Step 3: Creating ActiveBucket proxy via factory...");
-        address proxyAddr = factory.createActiveBucket(
-            bucketInfoAddr,
-            ONEINCH_ROUTER_V6,
-            TOKEN_NAME,
-            TOKEN_SYMBOL
-        );
+        address proxyAddr = factory.createActiveBucket(bucketInfoAddr, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
         ActiveBucket activeBucket = ActiveBucket(payable(proxyAddr));
         console.log("Proxy deployed at:", proxyAddr);
 

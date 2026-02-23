@@ -34,7 +34,7 @@ contract MockERC20Upgradeable is Initializable, ERC20Upgradeable {
     ) external initializer {
         __ERC20_init(name_, symbol_);
         _decimals = decimals_;
-        
+
         if (initialSupply_ > 0) {
             _mint(recipient_, initialSupply_ * 10 ** decimals_);
         }

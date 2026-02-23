@@ -17,7 +17,7 @@ import {PassiveBucketFactory} from "../src/PassiveBucketFactory.sol";
  */
 contract VerifyPassiveBucket is Script {
     function run() external view {
-        address proxyAddr   = vm.envAddress("PASSIVE_BUCKET_PROXY_ADDRESS");
+        address proxyAddr = vm.envAddress("PASSIVE_BUCKET_PROXY_ADDRESS");
         address factoryAddr = vm.envOr("PASSIVE_BUCKET_FACTORY_ADDRESS", address(0));
 
         PassiveBucket pb = PassiveBucket(payable(proxyAddr));
@@ -108,7 +108,7 @@ contract VerifyPassiveBucket is Script {
         result[0] = "0";
         result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
-            result[2 + i * 2]     = hexChars[uint8(data[i] >> 4)];
+            result[2 + i * 2] = hexChars[uint8(data[i] >> 4)];
             result[2 + i * 2 + 1] = hexChars[uint8(data[i] & 0x0f)];
         }
         return string(result);

@@ -27,7 +27,7 @@ contract DeployPassiveBucketSepolia is Script {
     uint24 constant UNISWAP_V3_FEE = 3000;
 
     // ERC-20 share token metadata
-    string constant TOKEN_NAME   = "PassiveBucket Share";
+    string constant TOKEN_NAME = "PassiveBucket Share";
     string constant TOKEN_SYMBOL = "pBKT";
 
     function run() external {
@@ -46,9 +46,9 @@ contract DeployPassiveBucketSepolia is Script {
 
         // Prepare initial distributions: 50% ETH, 30% WETH, 20% USDT
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
-        dists[0] = PassiveBucket.BucketDistribution(address(0), 50);  // 50% ETH
-        dists[1] = PassiveBucket.BucketDistribution(WETH, 30);         // 30% WETH
-        dists[2] = PassiveBucket.BucketDistribution(USDT, 20);         // 20% USDT
+        dists[0] = PassiveBucket.BucketDistribution(address(0), 50); // 50% ETH
+        dists[1] = PassiveBucket.BucketDistribution(WETH, 30); // 30% WETH
+        dists[2] = PassiveBucket.BucketDistribution(USDT, 20); // 20% USDT
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -64,13 +64,8 @@ contract DeployPassiveBucketSepolia is Script {
 
         // Step 3: Create a PassiveBucket proxy via the factory
         console.log("Step 3: Creating PassiveBucket proxy via factory...");
-        address proxyAddr = factory.createPassiveBucket(
-            bucketInfoAddr,
-            dists,
-            ONEINCH_ROUTER_V6,
-            TOKEN_NAME,
-            TOKEN_SYMBOL
-        );
+        address proxyAddr =
+            factory.createPassiveBucket(bucketInfoAddr, dists, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
         PassiveBucket passiveBucket = PassiveBucket(payable(proxyAddr));
         console.log("Proxy deployed at:", proxyAddr);
 

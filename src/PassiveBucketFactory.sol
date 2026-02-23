@@ -21,11 +21,7 @@ contract PassiveBucketFactory {
 
     /// @notice Emitted when a new PassiveBucket proxy is deployed
     event PassiveBucketCreated(
-        address indexed proxy,
-        address indexed owner,
-        address indexed bucketInfo,
-        string name,
-        string symbol
+        address indexed proxy, address indexed owner, address indexed bucketInfo, string name, string symbol
     );
 
     error InvalidImplementation();
@@ -63,10 +59,8 @@ contract PassiveBucketFactory {
         if (oneInchRouter == address(0)) revert InvalidOneInchRouter();
 
         // Encode the initializer call
-        bytes memory initData = abi.encodeCall(
-            PassiveBucket.initialize,
-            (bucketInfoAddr, distributions, oneInchRouter, name, symbol)
-        );
+        bytes memory initData =
+            abi.encodeCall(PassiveBucket.initialize, (bucketInfoAddr, distributions, oneInchRouter, name, symbol));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = address(new ERC1967Proxy(implementation, initData));

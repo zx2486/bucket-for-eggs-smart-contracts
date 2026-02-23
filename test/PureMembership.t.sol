@@ -43,8 +43,13 @@ contract MockBucketInfoForMembership {
         return whitelistedList;
     }
 
-    function PRICE_DECIMALS() external pure returns (uint256) { return 8; }
-    function platformFee() external view returns (uint256) { return feeRate; }
+    function PRICE_DECIMALS() external pure returns (uint256) {
+        return 8;
+    }
+
+    function platformFee() external view returns (uint256) {
+        return feeRate;
+    }
 
     function addToken(address token, uint256 price) external {
         if (!whitelisted[token]) {
@@ -136,12 +141,20 @@ contract PureMembershipTest is Test {
     uint256 constant VIP_DURATION = 365 days;
 
     event MembershipPurchased(
-        address indexed user, uint256 indexed tokenId, uint256 level,
-        address payToken, uint256 payAmount, uint256 expiryTime
+        address indexed user,
+        uint256 indexed tokenId,
+        uint256 level,
+        address payToken,
+        uint256 payAmount,
+        uint256 expiryTime
     );
     event MembershipRenewed(
-        address indexed user, uint256 indexed tokenId, uint256 level,
-        address payToken, uint256 payAmount, uint256 newExpiryTime
+        address indexed user,
+        uint256 indexed tokenId,
+        uint256 level,
+        address payToken,
+        uint256 payAmount,
+        uint256 newExpiryTime
     );
     event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
     event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
@@ -163,12 +176,11 @@ contract PureMembershipTest is Test {
         // Prepare membership configs
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
         configs[0] = PureMembership.MembershipConfig(BASIC_ID, BASIC_LEVEL, "Basic", BASIC_PRICE, BASIC_DURATION);
-        configs[1] = PureMembership.MembershipConfig(PREMIUM_ID, PREMIUM_LEVEL, "Premium", PREMIUM_PRICE, PREMIUM_DURATION);
+        configs[1] =
+            PureMembership.MembershipConfig(PREMIUM_ID, PREMIUM_LEVEL, "Premium", PREMIUM_PRICE, PREMIUM_DURATION);
         configs[2] = PureMembership.MembershipConfig(VIP_ID, VIP_LEVEL, "VIP", VIP_PRICE, VIP_DURATION);
 
-        bytes memory initData = abi.encodeWithSelector(
-            PureMembership.initialize.selector, configs, address(bucketInfo)
-        );
+        bytes memory initData = abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(bucketInfo));
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         membership = PureMembership(payable(address(proxy)));
 
@@ -209,9 +221,7 @@ contract PureMembershipTest is Test {
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
 
         vm.expectRevert(PureMembership.ZeroAddress.selector);
-        bytes memory initData = abi.encodeWithSelector(
-            PureMembership.initialize.selector, configs, address(0)
-        );
+        bytes memory initData = abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(0));
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -266,9 +276,7 @@ contract PureMembershipTest is Test {
         uint256 expectedPayment = 5e15;
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(PureMembership.InsufficientPayment.selector, expectedPayment, 1)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PureMembership.InsufficientPayment.selector, expectedPayment, 1));
         membership.buyMembership{value: 1}(BASIC_ID, address(0));
     }
 

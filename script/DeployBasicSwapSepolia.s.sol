@@ -12,7 +12,7 @@ import {BasicSwap} from "../src/BasicSwap.sol";
 contract DeployBasicSwapSepolia is Script {
     // Sepolia addresses
     address constant USDT = 0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0;
-    
+
     // 1inch Router V6 on Sepolia
     address constant ONEINCH_ROUTER_V6 = 0x111111125421cA6dc452d289314280a0f8842A65;
 

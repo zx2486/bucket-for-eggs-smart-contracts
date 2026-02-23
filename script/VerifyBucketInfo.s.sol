@@ -14,7 +14,7 @@ contract VerifyBucketInfo is Script {
     function run() external view {
         // Read the deployed contract address from environment variable or argument
         address bucketInfoAddress = vm.envAddress("BUCKETINFO_ADDRESS");
-        
+
         BucketInfo bucketInfo = BucketInfo(bucketInfoAddress);
 
         console.log("=== BucketInfo Contract Verification ===");
@@ -35,7 +35,7 @@ contract VerifyBucketInfo is Script {
         for (uint256 i = 0; i < whitelistedTokens.length; i++) {
             address token = whitelistedTokens[i];
             address priceFeed = bucketInfo.getPriceFeed(token);
-            
+
             console.log("Token", i, ":");
             console.log("  Address:", token);
             console.log("  Price Feed:", priceFeed);

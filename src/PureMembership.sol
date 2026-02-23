@@ -107,22 +107,9 @@ contract PureMembership is
         uint256 payAmount,
         uint256 newExpiryTime
     );
-    event MembershipCancelled(
-        address indexed user,
-        uint256 indexed tokenId,
-        uint256 level
-    );
-    event RevenueWithdrawn(
-        address indexed to,
-        address indexed token,
-        uint256 amount,
-        uint256 fee
-    );
-    event TokensRecovered(
-        address indexed token,
-        address indexed to,
-        uint256 amount
-    );
+    event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
+    event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
+    event TokensRecovered(address indexed token, address indexed to, uint256 amount);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -145,8 +132,9 @@ contract PureMembership is
     //////////////////////////////////////////////////////////////*/
 
     modifier whenPlatformOperational() {
-        if (!bucketInfo.isPlatformOperational())
+        if (!bucketInfo.isPlatformOperational()) {
             revert PlatformNotOperational();
+        }
         _;
     }
 
@@ -169,11 +157,10 @@ contract PureMembership is
      * @param bucketInfoAddr The BucketInfo contract address
      * @param uri The URI for the ERC-1155 metadata
      */
-    function initialize(
-        MembershipConfig[] calldata configs,
-        address bucketInfoAddr,
-        string calldata uri
-    ) external initializer {
+    function initialize(MembershipConfig[] calldata configs, address bucketInfoAddr, string calldata uri)
+        external
+        initializer
+    {
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
 
         __ERC1155_init(uri);
@@ -201,14 +188,18 @@ contract PureMembership is
      * @param tokenId The membership token ID to purchase
      * @param payTokenAddress The payment token (address(0) for ETH)
      */
-    function buyMembership(
-        uint256 tokenId,
-        address payTokenAddress
-    ) external payable nonReentrant whenNotPaused whenPlatformOperational {
+    function buyMembership(uint256 tokenId, address payTokenAddress)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        whenPlatformOperational
+    {
         MembershipConfig memory config = membershipConfigs[tokenId];
         if (config.duration == 0) revert InvalidTokenId(tokenId);
-        if (!bucketInfo.isTokenValid(payTokenAddress))
+        if (!bucketInfo.isTokenValid(payTokenAddress)) {
             revert InvalidToken(payTokenAddress);
+        }
 
         // Calculate payment amount based on token price
         uint256 oraclePrice = bucketInfo.getTokenPrice(payTokenAddress);
@@ -227,15 +218,11 @@ contract PureMembership is
             // Refund excess ETH
             uint256 excess = msg.value - paymentAmount;
             if (excess > 0) {
-                (bool success, ) = msg.sender.call{value: excess}("");
+                (bool success,) = msg.sender.call{value: excess}("");
                 if (!success) revert ETHTransferFailed();
             }
         } else {
-            IERC20(payTokenAddress).safeTransferFrom(
-                msg.sender,
-                address(this),
-                paymentAmount
-            );
+            IERC20(payTokenAddress).safeTransferFrom(msg.sender, address(this), paymentAmount);
         }
 
         // Track revenue
@@ -247,12 +234,7 @@ contract PureMembership is
             membershipExpiry[msg.sender][tokenId] += config.duration;
 
             emit MembershipRenewed(
-                msg.sender,
-                tokenId,
-                config.level,
-                payTokenAddress,
-                paymentAmount,
-                membershipExpiry[msg.sender][tokenId]
+                msg.sender, tokenId, config.level, payTokenAddress, paymentAmount, membershipExpiry[msg.sender][tokenId]
             );
         } else {
             // New membership
@@ -260,17 +242,10 @@ contract PureMembership is
                 _mint(msg.sender, tokenId, 1, "");
                 activeMembershipCount[config.level]++;
             }
-            membershipExpiry[msg.sender][tokenId] =
-                block.timestamp +
-                config.duration;
+            membershipExpiry[msg.sender][tokenId] = block.timestamp + config.duration;
 
             emit MembershipPurchased(
-                msg.sender,
-                tokenId,
-                config.level,
-                payTokenAddress,
-                paymentAmount,
-                membershipExpiry[msg.sender][tokenId]
+                msg.sender, tokenId, config.level, payTokenAddress, paymentAmount, membershipExpiry[msg.sender][tokenId]
             );
         }
     }
@@ -281,18 +256,11 @@ contract PureMembership is
      * @param level The minimum membership level to check
      * @return True if the user has an active membership at the level or above
      */
-    function checkMembershipStatus(
-        address user,
-        uint256 level
-    ) external view returns (bool) {
+    function checkMembershipStatus(address user, uint256 level) external view returns (bool) {
         for (uint256 i = 0; i < configuredTokenIds.length; i++) {
             uint256 tid = configuredTokenIds[i];
             MembershipConfig memory config = membershipConfigs[tid];
-            if (
-                config.level >= level &&
-                balanceOf(user, tid) > 0 &&
-                membershipExpiry[user][tid] > block.timestamp
-            ) {
+            if (config.level >= level && balanceOf(user, tid) > 0 && membershipExpiry[user][tid] > block.timestamp) {
                 return true;
             }
         }
@@ -305,8 +273,9 @@ contract PureMembership is
      */
     function cancelMembership(uint256 tokenId) external nonReentrant {
         if (balanceOf(msg.sender, tokenId) == 0) revert NoActiveMembership();
-        if (membershipExpiry[msg.sender][tokenId] <= block.timestamp)
+        if (membershipExpiry[msg.sender][tokenId] <= block.timestamp) {
             revert MembershipExpired();
+        }
 
         MembershipConfig memory config = membershipConfigs[tokenId];
 
@@ -329,9 +298,7 @@ contract PureMembership is
      * @param tokenId The membership token ID
      * @return The MembershipConfig struct
      */
-    function getMembershipInfo(
-        uint256 tokenId
-    ) external view returns (MembershipConfig memory) {
+    function getMembershipInfo(uint256 tokenId) external view returns (MembershipConfig memory) {
         return membershipConfigs[tokenId];
     }
 
@@ -340,9 +307,7 @@ contract PureMembership is
      * @param user The user address
      * @return Array of UserMembership structs
      */
-    function getUserMemberships(
-        address user
-    ) external view returns (UserMembership[] memory) {
+    function getUserMemberships(address user) external view returns (UserMembership[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < configuredTokenIds.length; i++) {
             if (balanceOf(user, configuredTokenIds[i]) > 0) {
@@ -376,11 +341,7 @@ contract PureMembership is
      * @return tokens Array of payment token addresses with revenue
      * @return amounts Array of revenue amounts per token
      */
-    function getMembershipRevenue()
-        external
-        view
-        returns (address[] memory tokens, uint256[] memory amounts)
-    {
+    function getMembershipRevenue() external view returns (address[] memory tokens, uint256[] memory amounts) {
         address[] memory whitelisted = bucketInfo.getWhitelistedTokens();
         uint256 count = 0;
 
@@ -423,18 +384,20 @@ contract PureMembership is
      * @param tokenAddr The token to withdraw
      * @param amount The amount to withdraw
      */
-    function withdrawRevenue(
-        address to,
-        address tokenAddr,
-        uint256 amount
-    ) external onlyOwner nonReentrant whenPlatformOperational {
+    function withdrawRevenue(address to, address tokenAddr, uint256 amount)
+        external
+        onlyOwner
+        nonReentrant
+        whenPlatformOperational
+    {
         // if (to == address(0)) revert ZeroAddress();
         if (!bucketInfo.isTokenValid(tokenAddr)) revert InvalidToken(tokenAddr);
         if (amount == 0) revert ZeroAmount();
 
         uint256 balance = _getTokenBalance(tokenAddr);
-        if (amount > balance)
+        if (amount > balance) {
             revert InsufficientContractBalance(amount, balance);
+        }
 
         // Ensure the amount is at least 100 USD on first withdrawal to avoid dust withdrawals
         uint256 oraclePrice = bucketInfo.getTokenPrice(tokenAddr);
@@ -489,17 +452,14 @@ contract PureMembership is
      * @param amount The amount to recover
      * @param to The recipient address
      */
-    function recoverTokens(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyOwner {
+    function recoverTokens(address token, uint256 amount, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        if (bucketInfo.isTokenWhitelisted(token))
+        if (bucketInfo.isTokenWhitelisted(token)) {
             revert CannotRecoverWhitelistedToken(token);
+        }
 
         if (token == address(0)) {
-            (bool success, ) = to.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
@@ -522,22 +482,16 @@ contract PureMembership is
         return IERC20Metadata(token).decimals();
     }
 
-    function _transferToken(
-        address token,
-        address to,
-        uint256 amount
-    ) internal {
+    function _transferToken(address token, address to, uint256 amount) internal {
         if (token == address(0)) {
-            (bool success, ) = to.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
     }
 
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /*//////////////////////////////////////////////////////////////
                           RECEIVE ETH

@@ -12,11 +12,5 @@ interface IFlashLoanReceiver {
     /// @param amount The amount of tokens flash loaned
     /// @param fee The fee amount that must be repaid on top of the principal
     /// @param data Arbitrary data passed from the flash loan caller
-    function onFlashLoan(
-        address initiator,
-        address token,
-        uint256 amount,
-        uint256 fee,
-        bytes calldata data
-    ) external;
+    function onFlashLoan(address initiator, address token, uint256 amount, uint256 fee, bytes calldata data) external;
 }

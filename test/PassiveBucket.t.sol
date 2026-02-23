@@ -43,8 +43,13 @@ contract MockBucketInfoForPassive {
         return whitelistedList;
     }
 
-    function PRICE_DECIMALS() external pure returns (uint256) { return 8; }
-    function platformFee() external view returns (uint256) { return feeRate; }
+    function PRICE_DECIMALS() external pure returns (uint256) {
+        return 8;
+    }
+
+    function platformFee() external view returns (uint256) {
+        return feeRate;
+    }
 
     // --- Helpers for tests ---
     function addToken(address token, uint256 price) external {
@@ -154,11 +159,13 @@ contract PassiveBucketTest is Test {
     address public user2;
     address public user3;
 
-    uint256 constant ETH_PRICE = 2000e8;     // $2000 USD (8 decimals)
+    uint256 constant ETH_PRICE = 2000e8; // $2000 USD (8 decimals)
     uint256 constant TOKEN_A_PRICE = 2000e8; // $2000 USD
-    uint256 constant TOKEN_B_PRICE = 1e8;    // $1 USD
+    uint256 constant TOKEN_B_PRICE = 1e8; // $1 USD
 
-    event Deposited(address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD);
+    event Deposited(
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
+    );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
     event BucketDistributionsUpdated(PassiveBucket.BucketDistribution[] distributions);
     event SwapPauseChanged(bool paused);
@@ -176,9 +183,9 @@ contract PassiveBucketTest is Test {
         oneInchRouter = new MockOneInchRouter();
 
         // Setup BucketInfo
-        bucketInfo.addToken(address(0), ETH_PRICE);          // ETH
-        bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);  // Token A
-        bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);  // Token B
+        bucketInfo.addToken(address(0), ETH_PRICE); // ETH
+        bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE); // Token A
+        bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE); // Token B
 
         // Deploy implementation
         implementation = new PassiveBucket();
@@ -245,9 +252,8 @@ contract PassiveBucketTest is Test {
 
         // Zero bucketInfo
         vm.expectRevert(PassiveBucket.ZeroAddress.selector);
-        bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector, address(0), dists, address(oneInchRouter)
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(PassiveBucket.initialize.selector, address(0), dists, address(oneInchRouter));
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -303,7 +309,7 @@ contract PassiveBucketTest is Test {
         assertEq(bucket.tokenPrice(), 1e8);
 
         // shares = (1e18 * 2000e8 / 1e18) * 1e18 / 1e8 = 2000e8 * 1e18 / 1e8 = 2000e18
-        uint256 expectedShares = (depositAmount * ETH_PRICE / 1e18) * 1e18 / 1e8;
+        uint256 expectedShares = (((depositAmount * ETH_PRICE) / 1e18) * 1e18) / 1e8;
         assertEq(bucket.balanceOf(user1), expectedShares);
         assertEq(bucket.totalDepositValue(), 2000e8);
         assertEq(address(bucket).balance, depositAmount);
@@ -318,7 +324,7 @@ contract PassiveBucketTest is Test {
         vm.stopPrank();
 
         // shares = (1000e6 * 1e8 / 1e6) * 1e18 / 1e8 = 1000e8 * 1e18 / 1e8 = 1000e18
-        uint256 expectedShares = (depositAmount * TOKEN_B_PRICE / 1e6) * 1e18 / 1e8;
+        uint256 expectedShares = (((depositAmount * TOKEN_B_PRICE) / 1e6) * 1e18) / 1e8;
         assertEq(bucket.balanceOf(user1), expectedShares);
         assertEq(bucket.totalDepositValue(), 1000e8);
     }
@@ -449,7 +455,7 @@ contract PassiveBucketTest is Test {
         uint256 newSupply = bucket.totalSupply();
 
         // Check if remaining + a bit is still accountable
-        if (remainingOwner * 10000 / newSupply < 500) {
+        if ((remainingOwner * 10000) / newSupply < 500) {
             // Already below 5%, next redeem should fail
             vm.expectRevert(PassiveBucket.OwnerNotAccountable.selector);
             bucket.redeem(1);
@@ -594,9 +600,7 @@ contract PassiveBucketTest is Test {
     function test_RevertRecoverWhitelistedTokens() public {
         tokenA.mint(address(bucket), 1000e18);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PassiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA))
-        );
+        vm.expectRevert(abi.encodeWithSelector(PassiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA)));
         bucket.recoverTokens(address(tokenA), 1000e18, user1);
     }
 

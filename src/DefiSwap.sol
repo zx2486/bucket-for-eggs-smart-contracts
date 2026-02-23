@@ -21,10 +21,7 @@ interface ISwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(ExactInputSingleParams calldata params) 
-        external 
-        payable 
-        returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 }
 
 /**
@@ -52,12 +49,7 @@ interface IQuoter {
 
     function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
         external
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
+        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
 }
 
 /**
@@ -66,8 +58,11 @@ interface IQuoter {
  */
 interface IWETH {
     function withdraw(uint256) external;
+
     function deposit() external payable;
+
     function balanceOf(address) external view returns (uint256);
+
     function approve(address, uint256) external returns (bool);
 }
 
@@ -269,15 +264,18 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         DEXConfig memory config = dexConfigs[dex];
         if (config.quoter == address(0)) return 0;
 
-        try IQuoter(config.quoter).quoteExactInputSingle(
-            IQuoter.QuoteExactInputSingleParams({
-                tokenIn: address(usdt),
-                tokenOut: address(weth),
-                amountIn: amount,
-                fee: config.fee,
-                sqrtPriceLimitX96: 0
-            })
-        ) returns (uint256 amountOut, uint160, uint32, uint256) {
+        try IQuoter(config.quoter)
+            .quoteExactInputSingle(
+                IQuoter.QuoteExactInputSingleParams({
+                    tokenIn: address(usdt),
+                    tokenOut: address(weth),
+                    amountIn: amount,
+                    fee: config.fee,
+                    sqrtPriceLimitX96: 0
+                })
+            ) returns (
+            uint256 amountOut, uint160, uint32, uint256
+        ) {
             return amountOut;
         } catch {
             return 0;
@@ -325,17 +323,18 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         usdt.forceApprove(config.router, amountIn);
 
         // Execute swap: USDT -> WETH using struct params
-        uint256 wethReceived = ISwapRouter(config.router).exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: address(usdt),
-                tokenOut: address(weth),
-                fee: config.fee,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: (minAmountOut * 95) / 100, // 5% slippage tolerance
-                sqrtPriceLimitX96: 0
-            })
-        );
+        uint256 wethReceived = ISwapRouter(config.router)
+            .exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: address(usdt),
+                    tokenOut: address(weth),
+                    fee: config.fee,
+                    recipient: address(this),
+                    amountIn: amountIn,
+                    amountOutMinimum: (minAmountOut * 95) / 100, // 5% slippage tolerance
+                    sqrtPriceLimitX96: 0
+                })
+            );
 
         // Reset USDT approval
         usdt.forceApprove(config.router, 0);

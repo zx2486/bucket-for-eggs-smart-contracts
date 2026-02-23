@@ -3,7 +3,9 @@ pragma solidity ^0.8.33;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {ERC20BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
+import {
+    ERC20BurnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -84,48 +86,21 @@ contract ActiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     event Deposited(
-        address indexed user,
-        address indexed token,
-        uint256 amount,
-        uint256 sharesMinted,
-        uint256 depositValueUSD
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
     );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
-    event TokenReturned(
-        address indexed user,
-        address indexed token,
-        uint256 amount
-    );
+    event TokenReturned(address indexed user, address indexed token, uint256 amount);
     event SwapPauseChanged(bool paused);
     event SwapExecuted(
-        address indexed caller,
-        uint256 totalValueBefore,
-        uint256 totalValueAfter,
-        uint256 newTokenPrice
+        address indexed caller, uint256 totalValueBefore, uint256 totalValueAfter, uint256 newTokenPrice
     );
     event FlashLoan(
-        address indexed initiator,
-        address indexed receiver,
-        address indexed token,
-        uint256 amount,
-        uint256 fee
+        address indexed initiator, address indexed receiver, address indexed token, uint256 amount, uint256 fee
     );
-    event TokensRecovered(
-        address indexed token,
-        address indexed to,
-        uint256 amount
-    );
+    event TokensRecovered(address indexed token, address indexed to, uint256 amount);
     event OneInchRouterUpdated(address indexed newRouter);
-    event PerformanceFeeDistributed(
-        address indexed recipient,
-        uint256 sharesMinted,
-        uint256 feeValueUSD
-    );
-    event PerformancePenaltyBurned(
-        address indexed owner,
-        uint256 sharesBurned,
-        uint256 penaltyValueUSD
-    );
+    event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUSD);
+    event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUSD);
     event PerformanceFeeUpdated(uint256 newFeeBps);
 
     /*//////////////////////////////////////////////////////////////
@@ -152,8 +127,9 @@ contract ActiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     modifier whenPlatformOperational() {
-        if (!bucketInfo.isPlatformOperational())
+        if (!bucketInfo.isPlatformOperational()) {
             revert PlatformNotOperational();
+        }
         _;
     }
 
@@ -180,12 +156,10 @@ contract ActiveBucket is
      * @param bucketInfoAddr The BucketInfo contract address
      * @param _oneInchRouter The 1inch aggregation router address
      */
-    function initialize(
-        address bucketInfoAddr,
-        address _oneInchRouter,
-        string memory name,
-        string memory symbol
-    ) external initializer {
+    function initialize(address bucketInfoAddr, address _oneInchRouter, string memory name, string memory symbol)
+        external
+        initializer
+    {
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
         if (_oneInchRouter == address(0)) revert ZeroAddress();
 
@@ -211,10 +185,13 @@ contract ActiveBucket is
      * @param token The token address (address(0) for ETH)
      * @param amount The amount to deposit (ignored for ETH; msg.value is used)
      */
-    function deposit(
-        address token,
-        uint256 amount
-    ) external payable nonReentrant whenNotPaused whenPlatformOperational {
+    function deposit(address token, uint256 amount)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        whenPlatformOperational
+    {
         if (!bucketInfo.isTokenValid(token)) revert InvalidToken(token);
 
         uint256 actualAmount;
@@ -222,11 +199,7 @@ contract ActiveBucket is
             actualAmount = msg.value;
         } else {
             actualAmount = amount;
-            IERC20(token).safeTransferFrom(
-                msg.sender,
-                address(this),
-                actualAmount
-            );
+            IERC20(token).safeTransferFrom(msg.sender, address(this), actualAmount);
         }
         if (actualAmount == 0) revert ZeroAmount();
 
@@ -245,13 +218,7 @@ contract ActiveBucket is
         totalDepositValue += depositValue;
         _mint(msg.sender, sharesToMint);
 
-        emit Deposited(
-            msg.sender,
-            token,
-            actualAmount,
-            sharesToMint,
-            depositValue
-        );
+        emit Deposited(msg.sender, token, actualAmount, sharesToMint, depositValue);
     }
 
     /**
@@ -259,11 +226,10 @@ contract ActiveBucket is
      * @dev Returns all whitelisted tokens proportionally to actual contract holdings
      * @param shares The number of share tokens to redeem
      */
-    function redeem(
-        uint256 shares
-    ) external nonReentrant whenNotPaused whenPlatformOperational {
-        if (shares == 0 || shares > balanceOf(msg.sender))
+    function redeem(uint256 shares) external nonReentrant whenNotPaused whenPlatformOperational {
+        if (shares == 0 || shares > balanceOf(msg.sender)) {
             revert InvalidRedeemAmount();
+        }
 
         uint256 supply = totalSupply();
         address[] memory tokens = bucketInfo.getWhitelistedTokens();
@@ -302,9 +268,7 @@ contract ActiveBucket is
      * @dev Does not check distribution or accountability. Value loss must be < 0.5%.
      * @param swapCalldata The encoded calldata for the 1inch router
      */
-    function swapBy1inch(
-        bytes calldata swapCalldata
-    )
+    function swapBy1inch(bytes calldata swapCalldata)
         external
         onlyOwner
         nonReentrant
@@ -315,15 +279,14 @@ contract ActiveBucket is
         uint256 totalValueBefore = _calculateTotalValue();
         uint256 beforeTokenPrice = tokenPrice;
 
-        (bool success, ) = oneInchRouter.call(swapCalldata);
+        (bool success,) = oneInchRouter.call(swapCalldata);
         if (!success) revert SwapFailed();
 
         uint256 totalValueAfter = _calculateTotalValue();
 
         // Check value loss < 0.5%
         if (totalValueAfter < totalValueBefore) {
-            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) /
-                BPS_DENOMINATOR;
+            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) / BPS_DENOMINATOR;
             if (totalValueBefore - totalValueAfter > maxLoss) {
                 revert ValueLossTooHigh(totalValueBefore, totalValueAfter);
             }
@@ -332,18 +295,10 @@ contract ActiveBucket is
         // Send performance fee to BucketInfo and owner
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfter,
-            performanceFeeBps,
-            tokenTotalSupply
+            beforeTokenPrice * tokenTotalSupply, totalValueAfter, performanceFeeBps, tokenTotalSupply
         );
 
-        emit SwapExecuted(
-            msg.sender,
-            totalValueBefore,
-            totalValueAfter,
-            tokenPrice
-        );
+        emit SwapExecuted(msg.sender, totalValueBefore, totalValueAfter, tokenPrice);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -357,12 +312,13 @@ contract ActiveBucket is
      * @param receiver The address that receives the tokens and callback
      * @param data Arbitrary data to pass to the flash loan receiver
      */
-    function flashLoan(
-        address token,
-        uint256 amount,
-        address receiver,
-        bytes calldata data
-    ) external onlyOwner nonReentrant whenNotPaused whenPlatformOperational {
+    function flashLoan(address token, uint256 amount, address receiver, bytes calldata data)
+        external
+        onlyOwner
+        nonReentrant
+        whenNotPaused
+        whenPlatformOperational
+    {
         if (receiver == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
 
@@ -376,13 +332,7 @@ contract ActiveBucket is
         _transferToken(token, receiver, amount);
 
         // Execute callback
-        IFlashLoanReceiver(receiver).onFlashLoan(
-            msg.sender,
-            token,
-            amount,
-            fee,
-            data
-        );
+        IFlashLoanReceiver(receiver).onFlashLoan(msg.sender, token, amount, fee, data);
 
         // Check repayment
         uint256 balanceAfter = _getTokenBalance(token);
@@ -395,10 +345,7 @@ contract ActiveBucket is
         uint256 totalValueAfterLoan = _calculateTotalValue();
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply,
-            totalValueAfterLoan,
-            performanceFeeBps,
-            tokenTotalSupply
+            beforeTokenPrice * tokenTotalSupply, totalValueAfterLoan, performanceFeeBps, tokenTotalSupply
         );
 
         emit FlashLoan(msg.sender, receiver, token, amount, fee);
@@ -442,17 +389,14 @@ contract ActiveBucket is
      * @param amount The amount to recover
      * @param to The recipient address
      */
-    function recoverTokens(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyOwner {
+    function recoverTokens(address token, uint256 amount, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        if (bucketInfo.isTokenWhitelisted(token))
+        if (bucketInfo.isTokenWhitelisted(token)) {
             revert CannotRecoverWhitelistedToken(token);
+        }
 
         if (token == address(0)) {
-            (bool success, ) = to.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
@@ -509,10 +453,7 @@ contract ActiveBucket is
         return totalValue;
     }
 
-    function _calculateValueOfShares(
-        uint256 shares,
-        uint256 supply
-    ) internal view returns (uint256) {
+    function _calculateValueOfShares(uint256 shares, uint256 supply) internal view returns (uint256) {
         if (supply == 0) return 0;
         return (_calculateTotalValue() * shares) / supply;
     }
@@ -527,13 +468,9 @@ contract ActiveBucket is
         return IERC20Metadata(token).decimals();
     }
 
-    function _transferToken(
-        address token,
-        address to,
-        uint256 amount
-    ) internal {
+    function _transferToken(address token, address to, uint256 amount) internal {
         if (token == address(0)) {
-            (bool success, ) = to.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
@@ -553,59 +490,40 @@ contract ActiveBucket is
         uint256 ownerFeeBps,
         uint256 tokenTotalSupply
     ) internal returns (uint256) {
-        if (
-            (balanceOf(owner()) * BPS_DENOMINATOR) / tokenTotalSupply >=
-            MIN_OWNER_BPS
-        ) {
+        if ((balanceOf(owner()) * BPS_DENOMINATOR) / tokenTotalSupply >= MIN_OWNER_BPS) {
             // provide performance fee or penalty only when owner is accountable (holding >= 5% of total supply)
             if (totalValueAfter > totalValueBefore) {
                 uint256 increase = totalValueAfter - totalValueBefore;
 
                 // Calculate new token price (pre-fee-minting)
-                uint256 newPrice = (totalValueAfter * PRECISION) /
-                    tokenTotalSupply;
+                uint256 newPrice = (totalValueAfter * PRECISION) / tokenTotalSupply;
 
                 // Platform fee to BucketInfo
                 uint256 platformFeeValue = bucketInfo.calculateFee(increase);
                 if (platformFeeValue > 0 && newPrice > 0) {
-                    uint256 platformShares = (platformFeeValue * PRECISION) /
-                        newPrice;
+                    uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
                     if (platformShares > 0) {
                         _mint(address(bucketInfo), platformShares);
-                        emit PerformanceFeeDistributed(
-                            address(bucketInfo),
-                            platformShares,
-                            platformFeeValue
-                        );
+                        emit PerformanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
                     }
                 }
 
                 // Owner fee
-                uint256 ownerFeeValue = (increase * ownerFeeBps) /
-                    BPS_DENOMINATOR;
+                uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
                 if (ownerFeeValue > 0 && newPrice > 0) {
-                    uint256 ownerShares = (ownerFeeValue * PRECISION) /
-                        newPrice;
+                    uint256 ownerShares = (ownerFeeValue * PRECISION) / newPrice;
                     if (ownerShares > 0) {
                         _mint(owner(), ownerShares);
-                        emit PerformanceFeeDistributed(
-                            owner(),
-                            ownerShares,
-                            ownerFeeValue
-                        );
+                        emit PerformanceFeeDistributed(owner(), ownerShares, ownerFeeValue);
                     }
                 }
             } else if (totalValueAfter < totalValueBefore) {
                 uint256 decrease = totalValueBefore - totalValueAfter;
 
                 // Owner bears 5% of decrease (burned from owner shares)
-                uint256 penaltyValue = (decrease * performanceFeeBps) /
-                    BPS_DENOMINATOR;
-                uint256 currentPrice = tokenPrice > 0
-                    ? tokenPrice
-                    : INITIAL_TOKEN_PRICE;
-                uint256 sharesToBurn = (penaltyValue * PRECISION) /
-                    currentPrice;
+                uint256 penaltyValue = (decrease * performanceFeeBps) / BPS_DENOMINATOR;
+                uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
+                uint256 sharesToBurn = (penaltyValue * PRECISION) / currentPrice;
                 uint256 ownerBalance = balanceOf(owner());
 
                 if (sharesToBurn > ownerBalance) {
@@ -613,20 +531,13 @@ contract ActiveBucket is
                 }
                 if (sharesToBurn > 0) {
                     _burn(owner(), sharesToBurn);
-                    emit PerformancePenaltyBurned(
-                        owner(),
-                        sharesToBurn,
-                        penaltyValue
-                    );
+                    emit PerformancePenaltyBurned(owner(), sharesToBurn, penaltyValue);
                 }
             }
         }
 
         // Update token price to reflect new state
-        return
-            (totalSupply() > 0)
-                ? (_calculateTotalValue() * PRECISION) / totalSupply()
-                : INITIAL_TOKEN_PRICE;
+        return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
     }
 
     /**
@@ -639,9 +550,7 @@ contract ActiveBucket is
         return (balanceOf(owner()) * BPS_DENOMINATOR) / supply >= MIN_OWNER_BPS;
     }
 
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /*//////////////////////////////////////////////////////////////
                           RECEIVE ETH

@@ -37,7 +37,7 @@ contract DeployPureMembershipSepolia is Script {
             tokenId: 1,
             level: 1,
             name: "Basic",
-            price: 10e8,     // $10 USD (8 decimals)
+            price: 10e8, // $10 USD (8 decimals)
             duration: 30 days
         });
 
@@ -46,7 +46,7 @@ contract DeployPureMembershipSepolia is Script {
             tokenId: 2,
             level: 2,
             name: "Premium",
-            price: 50e8,     // $50 USD
+            price: 50e8, // $50 USD
             duration: 365 days
         });
 
@@ -55,7 +55,7 @@ contract DeployPureMembershipSepolia is Script {
             tokenId: 3,
             level: 3,
             name: "VIP",
-            price: 200e8,    // $200 USD
+            price: 200e8, // $200 USD
             duration: 365 days
         });
 

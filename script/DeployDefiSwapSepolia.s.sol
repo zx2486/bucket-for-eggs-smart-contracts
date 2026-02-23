@@ -13,7 +13,7 @@ contract DeployDefiSwapSepolia is Script {
     // Sepolia addresses
     address constant USDT = 0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0;
     address constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
-    
+
     // Uniswap V3 addresses on Sepolia
     address constant UNISWAP_V3_ROUTER = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E; // SwapRouter02
     address constant UNISWAP_V3_QUOTER = 0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3; // QuoterV2
@@ -66,7 +66,7 @@ contract DeployDefiSwapSepolia is Script {
         console.log("WETH:", address(defiSwap.weth()));
         console.log("USDT:", address(defiSwap.usdt()));
         console.log("");
-        
+
         console.log("Configured DEXs:");
         DefiSwap.DEXConfig memory v3Config = defiSwap.getDEXConfig(DefiSwap.DEX.UNISWAP_V3);
         console.log("  Uniswap V3:", v3Config.enabled ? "Enabled" : "Disabled");
