@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
-import {IBucketInfo} from "../src/interfaces/IBucketInfo.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -437,7 +435,7 @@ contract PassiveBucketTest is Test {
         bucket.deposit{value: 100 ether}(address(0), 0);
 
         uint256 ownerShares = bucket.balanceOf(owner);
-        uint256 supply = bucket.totalSupply();
+        // uint256 supply = bucket.totalSupply();
 
         // Owner holds ~9.09%. Try to redeem enough to go below 5%
         // Need to retain 5% of new supply

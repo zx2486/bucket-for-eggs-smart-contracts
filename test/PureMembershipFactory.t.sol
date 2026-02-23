@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Test, console} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Test} from "forge-std/Test.sol";
 import {PureMembership} from "../src/PureMembership.sol";
 import {PureMembershipFactory} from "../src/PureMembershipFactory.sol";
 
@@ -154,7 +153,7 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_OwnerIsCallerNotFactory() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.prank(alice);
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(PureMembership(proxy).owner(), alice);
     }
@@ -162,21 +161,21 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_OwnerIsNotFactory() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.prank(alice);
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertTrue(PureMembership(proxy).owner() != address(factory));
     }
 
     function test_Create_BucketInfoIsSet() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(address(PureMembership(proxy).bucketInfo()), address(bucketInfo));
     }
 
     function test_Create_MembershipConfigsAreSet() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
         PureMembership pm = PureMembership(proxy);
 
         assertEq(pm.getConfiguredTokenIdCount(), 3);
@@ -203,7 +202,7 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_EmptyConfigsAllowed() public {
         // Zero configs is valid; owner can add configs later
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
         assertEq(PureMembership(proxy).getConfiguredTokenIdCount(), 0);
     }
 
@@ -214,7 +213,7 @@ contract PureMembershipFactoryTest is Test {
         // so we check that exactly one event with the correct indexed args is emitted.
         vm.recordLogs();
         vm.prank(alice);
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         // Verify the event via the returned proxy address
         assertEq(PureMembership(proxy).owner(), alice);
@@ -239,8 +238,8 @@ contract PureMembershipFactoryTest is Test {
         implementation.initialize(configs, address(bucketInfo), URI);
 
         // But factory deploy still works fine
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
-        assertTrue(proxy != address(0));
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        assertTrue(proxy != payable(0));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -249,7 +248,7 @@ contract PureMembershipFactoryTest is Test {
 
     function test_Tracking_SingleDeployment() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(factory.getDeployedProxiesCount(), 1);
         assertEq(factory.deployedProxies(0), proxy);
@@ -259,10 +258,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         vm.prank(bob);
-        address proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(factory.getDeployedProxiesCount(), 2);
         assertEq(factory.deployedProxies(0), proxy1);
@@ -272,8 +271,8 @@ contract PureMembershipFactoryTest is Test {
     function test_Tracking_ProxiesAreUnique() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertTrue(proxy1 != proxy2);
     }
@@ -281,9 +280,9 @@ contract PureMembershipFactoryTest is Test {
     function test_Tracking_GetAllDeployedProxies() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address proxy3 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy3 = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         address[] memory proxies = factory.getAllDeployedProxies();
         assertEq(proxies.length, 3);
@@ -300,10 +299,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         vm.prank(bob);
-        address proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(PureMembership(proxyAlice).owner(), alice);
         assertEq(PureMembership(proxyBob).owner(), bob);
@@ -313,10 +312,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         vm.prank(bob);
-        address proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         // Alice pauses her contract
         vm.prank(alice);
@@ -330,8 +329,8 @@ contract PureMembershipFactoryTest is Test {
         MockBucketInfoForFactory bucketInfo2 = new MockBucketInfoForFactory();
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address proxy2 = factory.createPureMembership(configs, address(bucketInfo2), URI);
+        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo2), URI);
 
         assertEq(address(PureMembership(proxy1).bucketInfo()), address(bucketInfo));
         assertEq(address(PureMembership(proxy2).bucketInfo()), address(bucketInfo2));
@@ -341,10 +340,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         vm.prank(bob);
-        address proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         // Alice tries to pause Bob's contract — should revert
         vm.prank(alice);
@@ -370,7 +369,7 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(caller);
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
 
         assertEq(PureMembership(proxy).owner(), caller);
     }

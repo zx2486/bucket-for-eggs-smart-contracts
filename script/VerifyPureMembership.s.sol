@@ -17,7 +17,7 @@ import {PureMembershipFactory} from "../src/PureMembershipFactory.sol";
  */
 contract VerifyPureMembership is Script {
     function run() external view {
-        address proxyAddr = vm.envAddress("PURE_MEMBERSHIP_PROXY_ADDRESS");
+        address payable proxyAddr = payable(vm.envAddress("PURE_MEMBERSHIP_PROXY_ADDRESS"));
         address factoryAddr = vm.envOr("PURE_MEMBERSHIP_FACTORY_ADDRESS", address(0));
 
         PureMembership pm = PureMembership(proxyAddr);
@@ -33,7 +33,7 @@ contract VerifyPureMembership is Script {
         console.log("Owner          :", pm.owner());
         console.log("BucketInfo     :", address(pm.bucketInfo()));
         console.log("Paused         :", pm.paused());
-        console.log("Active Members :", pm.activeMembershipCount());
+        console.log("Active Members :", pm.activeMembershipCount(0), "(non-expired)");
         console.log("");
 
         // ── Membership tiers ──────────────────────────────────────

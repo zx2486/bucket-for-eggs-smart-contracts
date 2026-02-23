@@ -98,7 +98,7 @@ contract PassiveBucket is
     }
 
     /// @notice DEX router configuration for rebalancing
-    struct DEXConfig {
+    struct DexConfig {
         address router;
         address quoter;
         uint24 fee;
@@ -134,7 +134,7 @@ contract PassiveBucket is
     uint256 public totalWithdrawValue;
 
     /// @notice DEX configurations indexed by ID
-    mapping(uint8 => DEXConfig) public dexConfigs;
+    mapping(uint8 => DexConfig) public dexConfigs;
 
     /// @notice Number of configured DEXs
     uint8 public dexCount;
@@ -171,7 +171,7 @@ contract PassiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     event Deposited(
-        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUsd
     );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
     event TokenReturned(address indexed user, address indexed token, uint256 amount);
@@ -184,10 +184,10 @@ contract PassiveBucket is
         uint256 totalValueAfter,
         uint256 newTokenPrice
     );
-    event RebalanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUSD);
-    event OwnerPenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUSD);
+    event RebalanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUsd);
+    event OwnerPenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUsd);
     event TokensRecovered(address indexed token, address indexed to, uint256 amount);
-    event DEXConfigured(uint8 indexed dexId, address router, address quoter, bool enabled);
+    event DexConfigured(uint8 indexed dexId, address router, address quoter, bool enabled);
     event WETHUpdated(address indexed weth);
     event RebalanceFeesUpdated(uint256 ownerFeeBps, uint256 callerFeeBps);
 
@@ -618,11 +618,11 @@ contract PassiveBucket is
      * @param enabled Whether the DEX is enabled
      */
     function configureDEX(uint8 dexId, address router, address quoter, uint24 fee, bool enabled) external onlyOwner {
-        dexConfigs[dexId] = DEXConfig({router: router, quoter: quoter, fee: fee, enabled: enabled});
+        dexConfigs[dexId] = DexConfig({router: router, quoter: quoter, fee: fee, enabled: enabled});
         if (dexId >= dexCount) {
             dexCount = dexId + 1;
         }
-        emit DEXConfigured(dexId, router, quoter, enabled);
+        emit DexConfigured(dexId, router, quoter, enabled);
     }
 
     /**
@@ -804,7 +804,7 @@ contract PassiveBucket is
         uint256 bestQuote = 0;
 
         for (uint8 i = 0; i < dexCount; i++) {
-            DEXConfig memory configTry = dexConfigs[i];
+            DexConfig memory configTry = dexConfigs[i];
             if (!configTry.enabled || configTry.quoter == address(0)) continue;
 
             try IQuoter(configTry.quoter)
@@ -829,7 +829,7 @@ contract PassiveBucket is
         require(bestQuote >= minAmountOut, "No sufficient quote found");
 
         // Execute on best DEX
-        DEXConfig memory config = dexConfigs[bestDex];
+        DexConfig memory config = dexConfigs[bestDex];
         IERC20(actualTokenIn).forceApprove(config.router, amountIn);
 
         ISwapRouter(config.router)

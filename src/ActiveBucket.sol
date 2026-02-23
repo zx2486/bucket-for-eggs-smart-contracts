@@ -86,7 +86,7 @@ contract ActiveBucket is
     //////////////////////////////////////////////////////////////*/
 
     event Deposited(
-        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUsd
     );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
     event TokenReturned(address indexed user, address indexed token, uint256 amount);
@@ -99,8 +99,8 @@ contract ActiveBucket is
     );
     event TokensRecovered(address indexed token, address indexed to, uint256 amount);
     event OneInchRouterUpdated(address indexed newRouter);
-    event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUSD);
-    event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUSD);
+    event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUsd);
+    event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUsd);
     event PerformanceFeeUpdated(uint256 newFeeBps);
 
     /*//////////////////////////////////////////////////////////////

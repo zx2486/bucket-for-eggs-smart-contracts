@@ -27,8 +27,8 @@ contract VerifyBasicSwap is Script {
 
         // Balances
         console.log("=== Contract Balances ===");
-        console.log("USDT Balance:", basicSwap.getContractUSDTBalance(), "(6 decimals)");
-        console.log("ETH Balance:", basicSwap.getContractETHBalance(), "wei");
+        console.log("USDT Balance:", basicSwap.getContractUsdtBalance(), "(6 decimals)");
+        console.log("ETH Balance:", basicSwap.getContractEthBalance(), "wei");
         console.log("Total USDT Deposited:", basicSwap.totalUSDTDeposited(), "(6 decimals)");
         console.log("");
 

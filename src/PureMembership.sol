@@ -403,11 +403,11 @@ contract PureMembership is
         uint256 oraclePrice = bucketInfo.getTokenPrice(tokenAddr);
         if (oraclePrice == 0) revert InvalidToken(tokenAddr);
         uint8 decimals = _getTokenDecimals(tokenAddr);
-        uint256 amountInUSD = (amount * oraclePrice) / (10 ** decimals);
+        uint256 amountInUsd = (amount * oraclePrice) / (10 ** decimals);
         if (totalWithdrawn == 0) {
-            if (amountInUSD < 100 * (10 ** 8)) {
+            if (amountInUsd < 100 * (10 ** 8)) {
                 // 100 USD with 8 decimals
-                revert InsufficientPayment(100 * (10 ** 8), amountInUSD);
+                revert InsufficientPayment(100 * (10 ** 8), amountInUsd);
             }
         }
         // Calculate fee
@@ -423,7 +423,7 @@ contract PureMembership is
         }
 
         withdrawnByToken[tokenAddr] += amount;
-        totalWithdrawn += amountInUSD;
+        totalWithdrawn += amountInUsd;
 
         emit RevenueWithdrawn(to, tokenAddr, ownerAmount, fee);
     }

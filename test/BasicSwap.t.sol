@@ -412,7 +412,7 @@ contract BasicSwapTest is Test {
         vm.expectEmit(true, false, false, true);
         emit USDTWithdrawn(user2, withdrawAmount);
 
-        basicSwap.withdrawUSDT(user2, withdrawAmount);
+        basicSwap.withdrawUsdt(user2, withdrawAmount);
 
         assertEq(usdt.balanceOf(user2), INITIAL_USDT_BALANCE + withdrawAmount);
     }
@@ -420,22 +420,22 @@ contract BasicSwapTest is Test {
     function test_WithdrawUSDTRevertsWhenNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        basicSwap.withdrawUSDT(user2, 100 * 10 ** USDT_DECIMALS);
+        basicSwap.withdrawUsdt(user2, 100 * 10 ** USDT_DECIMALS);
     }
 
     function test_WithdrawUSDTRevertsWithInvalidRecipient() public {
         vm.expectRevert("Invalid recipient");
-        basicSwap.withdrawUSDT(address(0), 100 * 10 ** USDT_DECIMALS);
+        basicSwap.withdrawUsdt(address(0), 100 * 10 ** USDT_DECIMALS);
     }
 
     function test_WithdrawUSDTRevertsWithZeroAmount() public {
         vm.expectRevert("Amount must be greater than 0");
-        basicSwap.withdrawUSDT(user1, 0);
+        basicSwap.withdrawUsdt(user1, 0);
     }
 
     function test_WithdrawUSDTRevertsWithInsufficientBalance() public {
         vm.expectRevert("Insufficient USDT balance");
-        basicSwap.withdrawUSDT(user1, 1000 * 10 ** USDT_DECIMALS);
+        basicSwap.withdrawUsdt(user1, 1000 * 10 ** USDT_DECIMALS);
     }
 
     function test_WithdrawETH() public {
@@ -466,7 +466,7 @@ contract BasicSwapTest is Test {
         vm.expectEmit(true, false, false, true);
         emit ETHWithdrawn(user2, withdrawAmount);
 
-        basicSwap.withdrawETH(payable(user2), withdrawAmount);
+        basicSwap.withdrawEth(payable(user2), withdrawAmount);
 
         assertEq(user2.balance, balanceBefore + withdrawAmount);
     }
@@ -474,22 +474,22 @@ contract BasicSwapTest is Test {
     function test_WithdrawETHRevertsWhenNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        basicSwap.withdrawETH(payable(user2), 1 ether);
+        basicSwap.withdrawEth(payable(user2), 1 ether);
     }
 
     function test_WithdrawETHRevertsWithInvalidRecipient() public {
         vm.expectRevert("Invalid recipient");
-        basicSwap.withdrawETH(payable(address(0)), 1 ether);
+        basicSwap.withdrawEth(payable(address(0)), 1 ether);
     }
 
     function test_WithdrawETHRevertsWithZeroAmount() public {
         vm.expectRevert("Amount must be greater than 0");
-        basicSwap.withdrawETH(payable(user1), 0);
+        basicSwap.withdrawEth(payable(user1), 0);
     }
 
     function test_WithdrawETHRevertsWithInsufficientBalance() public {
         vm.expectRevert("Insufficient ETH balance");
-        basicSwap.withdrawETH(payable(user1), 1 ether);
+        basicSwap.withdrawEth(payable(user1), 1 ether);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -516,7 +516,7 @@ contract BasicSwapTest is Test {
         basicSwap.depositUSDT(depositAmount);
         vm.stopPrank();
 
-        assertEq(basicSwap.getContractUSDTBalance(), depositAmount);
+        assertEq(basicSwap.getContractUsdtBalance(), depositAmount);
     }
 
     function test_GetContractETHBalance() public {
@@ -540,7 +540,7 @@ contract BasicSwapTest is Test {
 
         (, uint256 ethReceived) = basicSwap.swap(swapCalldata);
 
-        assertEq(basicSwap.getContractETHBalance(), ethReceived);
+        assertEq(basicSwap.getContractEthBalance(), ethReceived);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -590,13 +590,13 @@ contract BasicSwapTest is Test {
 
         // 3. Verify contract state
         assertEq(basicSwap.getUserBalance(user1), depositAmount);
-        assertEq(basicSwap.getContractETHBalance(), ethReceived);
-        console.log("3. Contract ETH balance:", basicSwap.getContractETHBalance());
-        console.log("   Contract USDT balance:", basicSwap.getContractUSDTBalance() / 10 ** USDT_DECIMALS, "USDT");
+        assertEq(basicSwap.getContractEthBalance(), ethReceived);
+        console.log("3. Contract ETH balance:", basicSwap.getContractEthBalance());
+        console.log("   Contract USDT balance:", basicSwap.getContractUsdtBalance() / 10 ** USDT_DECIMALS, "USDT");
 
         // 4. Owner withdraws some USDT
         uint256 withdrawAmount = 1000 * 10 ** USDT_DECIMALS;
-        basicSwap.withdrawUSDT(owner, withdrawAmount);
+        basicSwap.withdrawUsdt(owner, withdrawAmount);
         console.log("4. Owner withdrew:", withdrawAmount / 10 ** USDT_DECIMALS, "USDT");
 
         // 5. Verify final state
@@ -647,7 +647,7 @@ contract BasicSwapTest is Test {
         assertEq(usdtSwapped2, expectedSecondSwap);
 
         // Verify total ETH received
-        assertEq(basicSwap.getContractETHBalance(), ethReceived1 + ethReceived2);
+        assertEq(basicSwap.getContractEthBalance(), ethReceived1 + ethReceived2);
     }
 
     /*//////////////////////////////////////////////////////////////

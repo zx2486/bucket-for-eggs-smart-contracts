@@ -85,7 +85,7 @@ contract DeployPureMembershipSepolia is Script {
         // The factory deploys an ERC-1967 proxy, initialises it, then transfers
         // ownership to msg.sender (the deployer).
         console.log("Step 3: Creating PureMembership proxy via factory...");
-        address proxyAddr = factory.createPureMembership(configs, bucketInfoAddr, METADATA_URI);
+        address payable proxyAddr = factory.createPureMembership(configs, bucketInfoAddr, METADATA_URI);
         PureMembership pureMembership = PureMembership(proxyAddr);
         console.log("Proxy deployed at:", proxyAddr);
 

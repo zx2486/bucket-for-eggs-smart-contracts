@@ -52,14 +52,14 @@ contract PureMembershipFactory {
         PureMembership.MembershipConfig[] calldata configs,
         address bucketInfoAddr,
         string calldata uri
-    ) external returns (address proxy) {
+    ) external returns (address payable proxy) {
         if (bucketInfoAddr == address(0)) revert InvalidBucketInfo();
 
         // Encode the initializer call
         bytes memory initData = abi.encodeCall(PureMembership.initialize, (configs, bucketInfoAddr, uri));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
-        proxy = address(new ERC1967Proxy(implementation, initData));
+        proxy = payable(new ERC1967Proxy(implementation, initData));
 
         // Transfer ownership from this factory (msg.sender of initialize) to the caller.
         // initialize() sets owner = msg.sender which is this factory during the proxy

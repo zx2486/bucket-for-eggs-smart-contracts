@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PureMembership} from "../src/PureMembership.sol";
-import {IBucketInfo} from "../src/interfaces/IBucketInfo.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -570,14 +568,14 @@ contract PureMembershipTest is Test {
                       FUZZ TESTS
     //////////////////////////////////////////////////////////////*/
 
-    function testFuzz_BuyMembershipWithETH(uint256 extraETH) public {
+    function testFuzz_BuyMembershipWithETH(uint256 extraEth) public {
         uint256 expectedPayment = 5e15; // $10 at $2000/ETH
-        extraETH = bound(extraETH, 0, 10 ether);
+        extraEth = bound(extraEth, 0, 10 ether);
 
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
-        membership.buyMembership{value: expectedPayment + extraETH}(BASIC_ID, address(0));
+        membership.buyMembership{value: expectedPayment + extraEth}(BASIC_ID, address(0));
 
         // Excess should be refunded
         uint256 ethSpent = ethBefore - user1.balance;

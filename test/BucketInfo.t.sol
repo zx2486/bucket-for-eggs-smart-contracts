@@ -281,7 +281,7 @@ contract BucketInfoTest is Test {
                         UTILITY FUNCTION TESTS
     //////////////////////////////////////////////////////////////*/
 
-    function test_CalculateFee() public {
+    function test_CalculateFee() public view {
         uint256 amount = 1000 * 10 ** 18;
         uint256 expectedFee = (amount * 100) / 10000; // 1% of amount
 
@@ -375,6 +375,7 @@ contract BucketInfoTest is Test {
     function test_Gas_BatchSetTokenWhitelist() public {
         address[] memory tokens = new address[](5);
         for (uint256 i = 0; i < 5; i++) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             tokens[i] = address(uint160(i + 1000));
         }
         bucketInfo.batchSetTokenWhitelist(tokens, true);
