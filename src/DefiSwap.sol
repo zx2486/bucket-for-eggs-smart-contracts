@@ -197,6 +197,11 @@ contract DefiSwap is Ownable, ReentrancyGuard {
         executeSwap(bestDex, usdtSwapped, bestQuote);
         ethReceived = address(this).balance - ethBalanceBefore;
 
+        // Ensure that the slippage is within acceptable range (5% tolerance)
+        uint256 expectedETH = (usdtSwapped * bestQuote) / 1e6; // Convert USDT amount to ETH using quote
+        uint256 minExpected = (expectedETH * 95) / 100; // Allow 5% slippage
+        require(ethReceived >= minExpected, "Received less ETH than expected after slippage");
+
         require(ethReceived > 0, "No ETH received from swap");
 
         string memory dexName = getDEXName(bestDex);
