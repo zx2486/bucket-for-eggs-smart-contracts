@@ -8,7 +8,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -80,7 +80,7 @@ contract PassiveBucket is
     ERC20BurnableUpgradeable,
     PausableUpgradeable,
     OwnableUpgradeable,
-    ReentrancyGuardUpgradeable,
+    ReentrancyGuardTransient,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -272,8 +272,8 @@ contract PassiveBucket is
         __ERC20Burnable_init();
         __Pausable_init();
         __Ownable_init(msg.sender);
-        __ReentrancyGuard_init();
-        __UUPSUpgradeable_init();
+        // __ReentrancyGuard_init();
+        // __UUPSUpgradeable_init();
 
         bucketInfo = IBucketInfo(bucketInfoAddr);
         oneInchRouter = _oneInchRouter;
@@ -804,16 +804,16 @@ contract PassiveBucket is
         uint256 bestQuote = 0;
 
         for (uint8 i = 0; i < dexCount; i++) {
-            DEXConfig memory config = dexConfigs[i];
-            if (!config.enabled || config.quoter == address(0)) continue;
+            DEXConfig memory configTry = dexConfigs[i];
+            if (!configTry.enabled || configTry.quoter == address(0)) continue;
 
-            try IQuoter(config.quoter)
+            try IQuoter(configTry.quoter)
                 .quoteExactInputSingle(
                     IQuoter.QuoteExactInputSingleParams({
                         tokenIn: actualTokenIn,
                         tokenOut: actualTokenOut,
                         amountIn: amountIn,
-                        fee: config.fee,
+                        fee: configTry.fee,
                         sqrtPriceLimitX96: 0
                     })
                 ) returns (

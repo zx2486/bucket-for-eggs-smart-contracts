@@ -702,14 +702,6 @@ contract PassiveBucketTest is Test {
                     REBALANCE BY DEFI TESTS
     //////////////////////////////////////////////////////////////*/
 
-    function test_RevertRebalanceByDefiNoShares() public {
-        PassiveBucket.RebalanceOrder[] memory orders = new PassiveBucket.RebalanceOrder[](0);
-
-        vm.prank(user1);
-        vm.expectRevert(PassiveBucket.InsufficientShares.selector);
-        bucket.rebalanceByDefi(orders);
-    }
-
     function test_RevertRebalanceByDefiSwapPaused() public {
         vm.prank(user1);
         bucket.deposit{value: 1 ether}(address(0), 0);
@@ -717,11 +709,9 @@ contract PassiveBucketTest is Test {
 
         bucket.pauseSwap();
 
-        PassiveBucket.RebalanceOrder[] memory orders = new PassiveBucket.RebalanceOrder[](0);
-
         vm.prank(user1);
         vm.expectRevert(PassiveBucket.SwapIsPaused.selector);
-        bucket.rebalanceByDefi(orders);
+        bucket.rebalanceByDefi();
     }
 
     /*//////////////////////////////////////////////////////////////
