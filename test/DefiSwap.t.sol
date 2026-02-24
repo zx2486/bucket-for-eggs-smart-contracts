@@ -53,14 +53,14 @@ contract MockUniswapRouter {
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut) {
         // Pull USDT from sender
         usdt.transferFrom(msg.sender, address(this), params.amountIn);
-        
+
         // Calculate WETH output
         amountOut = (params.amountIn * exchangeRate) / 1e6;
-        
+
         // Mint WETH to recipient
         weth.deposit{value: amountOut}();
         weth.transfer(params.recipient, amountOut);
-        
+
         return amountOut;
     }
 
@@ -90,7 +90,9 @@ contract MockUniswapQuoter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function quoteExactInputSingle(QuoteExactInputSingleParams memory /* params */)
+    function quoteExactInputSingle(
+        QuoteExactInputSingleParams memory /* params */
+    )
         external
         view
         returns (uint256 amountOut, uint160, uint32, uint256)
@@ -122,14 +124,22 @@ contract MockCurvePool {
     function exchange(int128, int128, uint256 dx, uint256) external payable returns (uint256) {
         // Pull USDT from sender
         usdt.transferFrom(msg.sender, address(this), dx);
-        
+
         uint256 dy = (dx * exchangeRate) / 1e6;
         (bool success,) = msg.sender.call{value: dy}("");
         require(success, "ETH transfer failed");
         return dy;
     }
 
-    function get_dy(int128, int128, uint256 /* dx */) external view returns (uint256) {
+    function get_dy(
+        int128,
+        int128,
+        uint256 /* dx */
+    )
+        external
+        view
+        returns (uint256)
+    {
         // Return the exchange rate, not the calculated amount
         // Contract will do: expectedETH = (usdtAmount * rate) / 1e6
         return exchangeRate;
@@ -673,9 +683,7 @@ contract DefiSwapTest is Test {
         assertEq(defiSwap.totalUSDTDeposited(), amount);
     }
 
-    function testFuzz_SwapSelectsBestDEX(uint256 v3Rate, uint256 v4Rate, uint256 fluidRate, uint256 curveRate)
-        public
-    {
+    function testFuzz_SwapSelectsBestDEX(uint256 v3Rate, uint256 v4Rate, uint256 fluidRate, uint256 curveRate) public {
         // Bound rates to reasonable range
         v3Rate = bound(v3Rate, 0.0001 ether, 0.001 ether);
         v4Rate = bound(v4Rate, 0.0001 ether, 0.001 ether);
@@ -722,7 +730,7 @@ contract DefiSwapTest is Test {
             assertEq(usdtSwapped, depositAmount / 2);
 
             uint256 expectedETH = (usdtSwapped * bestRate) / 1e6;
-            
+
             // Allow minimal rounding errors
             assertGe(ethReceived, (expectedETH * 999) / 1000);
             assertLe(ethReceived, (expectedETH * 1001) / 1000);

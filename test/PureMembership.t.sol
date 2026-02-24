@@ -94,7 +94,11 @@ contract MockERC20ForMembership {
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) external returns (bool) {
         if (allowance[from][msg.sender] != type(uint256).max) {
             allowance[from][msg.sender] -= amount;
         }
@@ -154,8 +158,17 @@ contract PureMembershipTest is Test {
         uint256 payAmount,
         uint256 newExpiryTime
     );
-    event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
-    event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
+    event MembershipCancelled(
+        address indexed user,
+        uint256 indexed tokenId,
+        uint256 level
+    );
+    event RevenueWithdrawn(
+        address indexed to,
+        address indexed token,
+        uint256 amount,
+        uint256 fee
+    );
 
     function setUp() public {
         owner = address(this);
@@ -172,14 +185,40 @@ contract PureMembershipTest is Test {
         implementation = new PureMembership();
 
         // Prepare membership configs
-        PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
-        configs[0] = PureMembership.MembershipConfig(BASIC_ID, BASIC_LEVEL, "Basic", BASIC_PRICE, BASIC_DURATION);
-        configs[1] =
-            PureMembership.MembershipConfig(PREMIUM_ID, PREMIUM_LEVEL, "Premium", PREMIUM_PRICE, PREMIUM_DURATION);
-        configs[2] = PureMembership.MembershipConfig(VIP_ID, VIP_LEVEL, "VIP", VIP_PRICE, VIP_DURATION);
+        PureMembership.MembershipConfig[]
+            memory configs = new PureMembership.MembershipConfig[](3);
+        configs[0] = PureMembership.MembershipConfig(
+            BASIC_ID,
+            BASIC_LEVEL,
+            "Basic",
+            BASIC_PRICE,
+            BASIC_DURATION
+        );
+        configs[1] = PureMembership.MembershipConfig(
+            PREMIUM_ID,
+            PREMIUM_LEVEL,
+            "Premium",
+            PREMIUM_PRICE,
+            PREMIUM_DURATION
+        );
+        configs[2] = PureMembership.MembershipConfig(
+            VIP_ID,
+            VIP_LEVEL,
+            "VIP",
+            VIP_PRICE,
+            VIP_DURATION
+        );
 
-        bytes memory initData = abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(bucketInfo));
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        bytes memory initData = abi.encodeWithSelector(
+            PureMembership.initialize.selector,
+            configs,
+            address(bucketInfo),
+            ""
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(implementation),
+            initData
+        );
         membership = PureMembership(payable(address(proxy)));
 
         // Fund users
@@ -202,24 +241,32 @@ contract PureMembershipTest is Test {
     }
 
     function test_MembershipConfigs() public view {
-        PureMembership.MembershipConfig memory basic = membership.getMembershipInfo(BASIC_ID);
+        PureMembership.MembershipConfig memory basic = membership
+            .getMembershipInfo(BASIC_ID);
         assertEq(basic.tokenId, BASIC_ID);
         assertEq(basic.level, BASIC_LEVEL);
         assertEq(keccak256(bytes(basic.name)), keccak256("Basic"));
         assertEq(basic.price, BASIC_PRICE);
         assertEq(basic.duration, BASIC_DURATION);
 
-        PureMembership.MembershipConfig memory premium = membership.getMembershipInfo(PREMIUM_ID);
+        PureMembership.MembershipConfig memory premium = membership
+            .getMembershipInfo(PREMIUM_ID);
         assertEq(premium.level, PREMIUM_LEVEL);
         assertEq(premium.price, PREMIUM_PRICE);
     }
 
     function test_RevertInitializeZeroAddress() public {
         PureMembership impl = new PureMembership();
-        PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
+        PureMembership.MembershipConfig[]
+            memory configs = new PureMembership.MembershipConfig[](0);
 
         vm.expectRevert(PureMembership.ZeroAddress.selector);
-        bytes memory initData = abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(0));
+        bytes memory initData = abi.encodeWithSelector(
+            PureMembership.initialize.selector,
+            configs,
+            address(0),
+            ""
+        );
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -238,8 +285,13 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         assertEq(membership.balanceOf(user1, BASIC_ID), 1);
-        assertTrue(membership.membershipExpiry(user1, BASIC_ID) > block.timestamp);
-        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
+        assertTrue(
+            membership.membershipExpiry(user1, BASIC_ID) > block.timestamp
+        );
+        assertEq(
+            membership.membershipExpiry(user1, BASIC_ID),
+            block.timestamp + BASIC_DURATION
+        );
         assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
         assertEq(membership.activeMembershipCount(BASIC_LEVEL), 1);
     }
@@ -253,7 +305,9 @@ contract PureMembershipTest is Test {
         membership.buyMembership{value: expectedPayment}(BASIC_ID, address(0));
 
         assertEq(membership.balanceOf(user1, BASIC_ID), 1);
-        assertTrue(membership.membershipExpiry(user1, BASIC_ID) > block.timestamp);
+        assertTrue(
+            membership.membershipExpiry(user1, BASIC_ID) > block.timestamp
+        );
     }
 
     function test_BuyMembershipWithETHRefundExcess() public {
@@ -274,20 +328,33 @@ contract PureMembershipTest is Test {
         uint256 expectedPayment = 5e15;
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(PureMembership.InsufficientPayment.selector, expectedPayment, 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.InsufficientPayment.selector,
+                expectedPayment,
+                1
+            )
+        );
         membership.buyMembership{value: 1}(BASIC_ID, address(0));
     }
 
     function test_RevertBuyMembershipInvalidTokenId() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(PureMembership.InvalidTokenId.selector, 999));
+        vm.expectRevert(
+            abi.encodeWithSelector(PureMembership.InvalidTokenId.selector, 999)
+        );
         membership.buyMembership{value: 1 ether}(999, address(0));
     }
 
     function test_RevertBuyMembershipInvalidPayToken() public {
         address fakeToken = makeAddr("fakeToken");
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(PureMembership.InvalidToken.selector, fakeToken));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.InvalidToken.selector,
+                fakeToken
+            )
+        );
         membership.buyMembership(BASIC_ID, fakeToken);
     }
 
@@ -331,7 +398,10 @@ contract PureMembershipTest is Test {
         uint256 newExpiry = membership.membershipExpiry(user1, BASIC_ID);
         // Should extend from first expiry, not from current time
         assertEq(newExpiry, firstExpiry + BASIC_DURATION);
-        assertEq(membership.revenueByToken(address(payToken)), expectedPayment * 2);
+        assertEq(
+            membership.revenueByToken(address(payToken)),
+            expectedPayment * 2
+        );
         // Active count should still be 1 (not double counted)
         assertEq(membership.activeMembershipCount(BASIC_LEVEL), 1);
     }
@@ -351,7 +421,10 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         // Expiry should be from current time
-        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
+        assertEq(
+            membership.membershipExpiry(user1, BASIC_ID),
+            block.timestamp + BASIC_DURATION
+        );
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -454,14 +527,16 @@ contract PureMembershipTest is Test {
         membership.buyMembership(PREMIUM_ID, address(payToken));
         vm.stopPrank();
 
-        PureMembership.UserMembership[] memory memberships = membership.getUserMemberships(user1);
+        PureMembership.UserMembership[] memory memberships = membership
+            .getUserMemberships(user1);
         assertEq(memberships.length, 2);
         assertTrue(memberships[0].isActive);
         assertTrue(memberships[1].isActive);
     }
 
     function test_GetUserMembershipsEmpty() public view {
-        PureMembership.UserMembership[] memory memberships = membership.getUserMemberships(user1);
+        PureMembership.UserMembership[] memory memberships = membership
+            .getUserMemberships(user1);
         assertEq(memberships.length, 0);
     }
 
@@ -477,18 +552,20 @@ contract PureMembershipTest is Test {
         membership.buyMembership(BASIC_ID, address(payToken));
         vm.stopPrank();
 
-        (address[] memory tokens, uint256[] memory amounts) = membership.getMembershipRevenue();
+        (address[] memory tokens, uint256[] memory amounts) = membership
+            .getMembershipRevenue();
         assertEq(tokens.length, 1);
         assertEq(tokens[0], address(payToken));
         assertEq(amounts[0], expectedPayment);
     }
 
     function test_WithdrawRevenue() public {
-        uint256 expectedPayment = 10e6;
+        // VIP costs $200 → 200e6 USDC. First withdrawal requires >= $100 USD.
+        uint256 expectedPayment = 200e6;
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(VIP_ID, address(payToken));
         vm.stopPrank();
 
         uint256 withdrawAmount = expectedPayment;
@@ -496,11 +573,18 @@ contract PureMembershipTest is Test {
         uint256 ownerAmount = withdrawAmount - fee;
 
         address recipient = makeAddr("recipient");
-        membership.withdrawRevenue(recipient, address(payToken), withdrawAmount);
+        membership.withdrawRevenue(
+            recipient,
+            address(payToken),
+            withdrawAmount
+        );
 
         assertEq(payToken.balanceOf(recipient), ownerAmount);
         assertEq(payToken.balanceOf(address(bucketInfo)), fee);
-        assertEq(membership.withdrawnByToken(address(payToken)), withdrawAmount);
+        assertEq(
+            membership.withdrawnByToken(address(payToken)),
+            withdrawAmount
+        );
     }
 
     function test_RevertWithdrawRevenueNotOwner() public {
@@ -511,12 +595,23 @@ contract PureMembershipTest is Test {
 
     function test_RevertWithdrawRevenueInvalidToken() public {
         address fakeToken = makeAddr("fakeToken");
-        vm.expectRevert(abi.encodeWithSelector(PureMembership.InvalidToken.selector, fakeToken));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.InvalidToken.selector,
+                fakeToken
+            )
+        );
         membership.withdrawRevenue(user1, fakeToken, 100);
     }
 
     function test_RevertWithdrawRevenueInsufficientBalance() public {
-        vm.expectRevert(abi.encodeWithSelector(PureMembership.InsufficientContractBalance.selector, 1000e6, 0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.InsufficientContractBalance.selector,
+                1000e6,
+                0
+            )
+        );
         membership.withdrawRevenue(user1, address(payToken), 1000e6);
     }
 
@@ -532,7 +627,11 @@ contract PureMembershipTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_RecoverTokens() public {
-        MockERC20ForMembership rogue = new MockERC20ForMembership("Rogue", "RGT", 18);
+        MockERC20ForMembership rogue = new MockERC20ForMembership(
+            "Rogue",
+            "RGT",
+            18
+        );
         rogue.mint(address(membership), 500e18);
 
         membership.recoverTokens(address(rogue), 500e18, user1);
@@ -541,7 +640,10 @@ contract PureMembershipTest is Test {
 
     function test_RevertRecoverWhitelistedToken() public {
         vm.expectRevert(
-            abi.encodeWithSelector(PureMembership.CannotRecoverWhitelistedToken.selector, address(payToken))
+            abi.encodeWithSelector(
+                PureMembership.CannotRecoverWhitelistedToken.selector,
+                address(payToken)
+            )
         );
         membership.recoverTokens(address(payToken), 100e6, user1);
     }
@@ -575,7 +677,10 @@ contract PureMembershipTest is Test {
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
-        membership.buyMembership{value: expectedPayment + extraEth}(BASIC_ID, address(0));
+        membership.buyMembership{value: expectedPayment + extraEth}(
+            BASIC_ID,
+            address(0)
+        );
 
         // Excess should be refunded
         uint256 ethSpent = ethBefore - user1.balance;
@@ -600,6 +705,9 @@ contract PureMembershipTest is Test {
         }
 
         assertEq(membership.activeMembershipCount(BASIC_LEVEL), numUsers);
-        assertEq(membership.revenueByToken(address(payToken)), expectedPayment * numUsers);
+        assertEq(
+            membership.revenueByToken(address(payToken)),
+            expectedPayment * numUsers
+        );
     }
 }
