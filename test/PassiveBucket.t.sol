@@ -70,9 +70,7 @@ contract MockBucketInfoForPassive {
         whitelisted[token] = false;
         for (uint256 i = 0; i < whitelistedList.length; i++) {
             if (whitelistedList[i] == token) {
-                whitelistedList[i] = whitelistedList[
-                    whitelistedList.length - 1
-                ];
+                whitelistedList[i] = whitelistedList[whitelistedList.length - 1];
                 whitelistedList.pop();
                 break;
             }
@@ -112,11 +110,7 @@ contract MockERC20 {
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         if (allowance[from][msg.sender] != type(uint256).max) {
             allowance[from][msg.sender] -= amount;
         }
@@ -132,11 +126,7 @@ contract MockOneInchRouter {
     address public tokenOut;
     uint256 public rate; // how much tokenOut per tokenIn (in tokenOut units per tokenIn unit)
 
-    function setSwap(
-        address _tokenIn,
-        address _tokenOut,
-        uint256 _rate
-    ) external {
+    function setSwap(address _tokenIn, address _tokenOut, uint256 _rate) external {
         tokenIn = _tokenIn;
         tokenOut = _tokenOut;
         rate = _rate;
@@ -172,16 +162,10 @@ contract PassiveBucketTest is Test {
     uint256 constant TOKEN_B_PRICE = 1e8; // $1 USD
 
     event Deposited(
-        address indexed user,
-        address indexed token,
-        uint256 amount,
-        uint256 sharesMinted,
-        uint256 depositValueUSD
+        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUSD
     );
     event Redeemed(address indexed user, uint256 sharesRedeemed);
-    event BucketDistributionsUpdated(
-        PassiveBucket.BucketDistribution[] distributions
-    );
+    event BucketDistributionsUpdated(PassiveBucket.BucketDistribution[] distributions);
     event SwapPauseChanged(bool paused);
 
     function setUp() public {
@@ -205,8 +189,7 @@ contract PassiveBucketTest is Test {
         implementation = new PassiveBucket();
 
         // Prepare distributions: 50% ETH, 30% Token A, 20% Token B
-        PassiveBucket.BucketDistribution[]
-            memory dists = new PassiveBucket.BucketDistribution[](3);
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 30);
         dists[2] = PassiveBucket.BucketDistribution(address(tokenB), 20);
@@ -220,10 +203,7 @@ contract PassiveBucketTest is Test {
             "PassiveBucket Share",
             "pBKT"
         );
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(implementation),
-            initData
-        );
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         bucket = PassiveBucket(payable(address(proxy)));
 
         // Fund test accounts
@@ -253,8 +233,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_InitialDistributions() public view {
-        PassiveBucket.BucketDistribution[] memory dists = bucket
-            .getBucketDistributions();
+        PassiveBucket.BucketDistribution[] memory dists = bucket.getBucketDistributions();
         assertEq(dists.length, 3);
         assertEq(dists[0].token, address(0));
         assertEq(dists[0].weight, 50);
@@ -266,19 +245,13 @@ contract PassiveBucketTest is Test {
 
     function test_RevertInitializeZeroAddress() public {
         PassiveBucket impl = new PassiveBucket();
-        PassiveBucket.BucketDistribution[]
-            memory dists = new PassiveBucket.BucketDistribution[](1);
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
         // Zero bucketInfo
         vm.expectRevert(PassiveBucket.ZeroAddress.selector);
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector,
-            address(0),
-            dists,
-            address(oneInchRouter),
-            "Test",
-            "TST"
+            PassiveBucket.initialize.selector, address(0), dists, address(oneInchRouter), "Test", "TST"
         );
         new ERC1967Proxy(address(impl), initData);
     }
@@ -286,61 +259,36 @@ contract PassiveBucketTest is Test {
     function test_RevertInitializeInvalidWeights() public {
         PassiveBucket impl = new PassiveBucket();
         // Weights sum to 90 instead of 100
-        PassiveBucket.BucketDistribution[]
-            memory dists = new PassiveBucket.BucketDistribution[](2);
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 40);
 
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector,
-            address(bucketInfo),
-            dists,
-            address(oneInchRouter),
-            "Test",
-            "TST"
+            PassiveBucket.initialize.selector, address(bucketInfo), dists, address(oneInchRouter), "Test", "TST"
         );
-        vm.expectRevert(
-            abi.encodeWithSelector(PassiveBucket.WeightSumMismatch.selector, 90)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PassiveBucket.WeightSumMismatch.selector, 90));
         new ERC1967Proxy(address(impl), initData);
     }
 
     function test_RevertInitializeDuplicateTokens() public {
         PassiveBucket impl = new PassiveBucket();
-        PassiveBucket.BucketDistribution[]
-            memory dists = new PassiveBucket.BucketDistribution[](2);
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(0), 50);
 
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector,
-            address(bucketInfo),
-            dists,
-            address(oneInchRouter),
-            "Test",
-            "TST"
+            PassiveBucket.initialize.selector, address(bucketInfo), dists, address(oneInchRouter), "Test", "TST"
         );
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PassiveBucket.DuplicateToken.selector,
-                address(0)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(PassiveBucket.DuplicateToken.selector, address(0)));
         new ERC1967Proxy(address(impl), initData);
     }
 
     function test_RevertInitializeEmptyDistributions() public {
         PassiveBucket impl = new PassiveBucket();
-        PassiveBucket.BucketDistribution[]
-            memory dists = new PassiveBucket.BucketDistribution[](0);
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](0);
 
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector,
-            address(bucketInfo),
-            dists,
-            address(oneInchRouter),
-            "Test",
-            "TST"
+            PassiveBucket.initialize.selector, address(bucketInfo), dists, address(oneInchRouter), "Test", "TST"
         );
         vm.expectRevert(PassiveBucket.EmptyDistributions.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -360,8 +308,7 @@ contract PassiveBucketTest is Test {
         assertEq(bucket.tokenPrice(), 1e8);
 
         // shares = (1e18 * 2000e8 / 1e18) * 1e18 / 1e8 = 2000e8 * 1e18 / 1e8 = 2000e18
-        uint256 expectedShares = (((depositAmount * ETH_PRICE) / 1e18) * 1e18) /
-            1e8;
+        uint256 expectedShares = (((depositAmount * ETH_PRICE) / 1e18) * 1e18) / 1e8;
         assertEq(bucket.balanceOf(user1), expectedShares);
         assertEq(bucket.totalDepositValue(), 2000e8);
         assertEq(address(bucket).balance, depositAmount);
@@ -376,8 +323,7 @@ contract PassiveBucketTest is Test {
         vm.stopPrank();
 
         // shares = (1000e6 * 1e8 / 1e6) * 1e18 / 1e8 = 1000e8 * 1e18 / 1e8 = 1000e18
-        uint256 expectedShares = (((depositAmount * TOKEN_B_PRICE) / 1e6) *
-            1e18) / 1e8;
+        uint256 expectedShares = (((depositAmount * TOKEN_B_PRICE) / 1e6) * 1e18) / 1e8;
         assertEq(bucket.balanceOf(user1), expectedShares);
         assertEq(bucket.totalDepositValue(), 1000e8);
     }
@@ -410,12 +356,7 @@ contract PassiveBucketTest is Test {
     function test_RevertDepositInvalidToken() public {
         address fakeToken = makeAddr("fakeToken");
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PassiveBucket.InvalidToken.selector,
-                fakeToken
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(PassiveBucket.InvalidToken.selector, fakeToken));
         bucket.deposit(fakeToken, 100);
     }
 
@@ -504,10 +445,7 @@ contract PassiveBucketTest is Test {
         uint256 smallRedeem = ownerShares / 4;
         bucket.redeem(smallRedeem);
 
-        assertTrue(
-            bucket.isBucketAccountable(),
-            "Owner should still be accountable after small redeem"
-        );
+        assertTrue(bucket.isBucketAccountable(), "Owner should still be accountable after small redeem");
 
         // Now try to redeem enough to drop below 5% — should revert
         uint256 remainingOwner = bucket.balanceOf(owner);
@@ -516,8 +454,7 @@ contract PassiveBucketTest is Test {
         // Calculate amount that would push owner below 5%
         // Need: (remainingOwner - x) / (newSupply - x) < 0.05
         // Solve: x > (remainingOwner - 0.05*newSupply) / 0.95
-        uint256 threshold = ((remainingOwner * 10000) - (newSupply * 500)) /
-            9500;
+        uint256 threshold = ((remainingOwner * 10000) - (newSupply * 500)) / 9500;
         uint256 tooMuch = threshold + 1e18; // safely over the limit
 
         if (tooMuch <= remainingOwner) {
@@ -534,23 +471,20 @@ contract PassiveBucketTest is Test {
         // Owner must have shares for accountability
         bucket.deposit{value: 10 ether}(address(0), 0);
 
-        PassiveBucket.BucketDistribution[]
-            memory newDists = new PassiveBucket.BucketDistribution[](2);
+        PassiveBucket.BucketDistribution[] memory newDists = new PassiveBucket.BucketDistribution[](2);
         newDists[0] = PassiveBucket.BucketDistribution(address(0), 60);
         newDists[1] = PassiveBucket.BucketDistribution(address(tokenA), 40);
 
         bucket.updateBucketDistributions(newDists);
 
-        PassiveBucket.BucketDistribution[] memory stored = bucket
-            .getBucketDistributions();
+        PassiveBucket.BucketDistribution[] memory stored = bucket.getBucketDistributions();
         assertEq(stored.length, 2);
         assertEq(stored[0].weight, 60);
         assertEq(stored[1].weight, 40);
     }
 
     function test_RevertUpdateDistributionsNotOwner() public {
-        PassiveBucket.BucketDistribution[]
-            memory newDists = new PassiveBucket.BucketDistribution[](1);
+        PassiveBucket.BucketDistribution[] memory newDists = new PassiveBucket.BucketDistribution[](1);
         newDists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
         vm.prank(user1);
@@ -565,8 +499,7 @@ contract PassiveBucketTest is Test {
         bucket.deposit{value: 100 ether}(address(0), 0);
 
         // Owner has 0 shares, not accountable
-        PassiveBucket.BucketDistribution[]
-            memory newDists = new PassiveBucket.BucketDistribution[](1);
+        PassiveBucket.BucketDistribution[] memory newDists = new PassiveBucket.BucketDistribution[](1);
         newDists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
         vm.expectRevert(PassiveBucket.OwnerNotAccountable.selector);
@@ -578,8 +511,7 @@ contract PassiveBucketTest is Test {
 
         bucketInfo.setOperational(false);
 
-        PassiveBucket.BucketDistribution[]
-            memory newDists = new PassiveBucket.BucketDistribution[](1);
+        PassiveBucket.BucketDistribution[] memory newDists = new PassiveBucket.BucketDistribution[](1);
         newDists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
         vm.expectRevert(PassiveBucket.PlatformNotOperational.selector);
@@ -669,12 +601,7 @@ contract PassiveBucketTest is Test {
     function test_RevertRecoverWhitelistedTokens() public {
         tokenA.mint(address(bucket), 1000e18);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PassiveBucket.CannotRecoverWhitelistedToken.selector,
-                address(tokenA)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(PassiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA)));
         bucket.recoverTokens(address(tokenA), 1000e18, user1);
     }
 
@@ -736,13 +663,7 @@ contract PassiveBucketTest is Test {
     function test_RevertConfigureDEXNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        bucket.configureDEX(
-            0,
-            makeAddr("router"),
-            makeAddr("quoter"),
-            3000,
-            true
-        );
+        bucket.configureDEX(0, makeAddr("router"), makeAddr("quoter"), 3000, true);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -842,10 +763,7 @@ contract PassiveBucketTest is Test {
         assertApproxEqAbs(ethReceived, depositAmount, 1);
     }
 
-    function testFuzz_MultipleDepositsAndRedeems(
-        uint256 amount1,
-        uint256 amount2
-    ) public {
+    function testFuzz_MultipleDepositsAndRedeems(uint256 amount1, uint256 amount2) public {
         amount1 = bound(amount1, 0.01 ether, 25 ether);
         amount2 = bound(amount2, 0.01 ether, 25 ether);
 
@@ -877,7 +795,7 @@ contract PassiveBucketTest is Test {
     function test_ReceiveETH() public {
         vm.deal(user1, 10 ether);
         vm.prank(user1);
-        (bool success, ) = address(bucket).call{value: 1 ether}("");
+        (bool success,) = address(bucket).call{value: 1 ether}("");
         assertTrue(success);
     }
 
