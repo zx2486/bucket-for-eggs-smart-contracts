@@ -361,4 +361,13 @@ contract BucketInfo is Ownable, Pausable {
 
         emit FeesWithdrawn(NATIVE_TOKEN, to, amount);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                        RECEIVE FUNCTION
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Allow contract to receive ETH
+     */
+    receive() external payable {}
 }

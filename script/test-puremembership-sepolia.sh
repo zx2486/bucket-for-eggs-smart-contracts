@@ -108,7 +108,7 @@ fi
 echo -e "${YELLOW}  Membership tiers:${NC}"
 for i in $(seq 0 $((TIER_COUNT - 1))); do
     TOKEN_ID=$(cast call "$PM" "configuredTokenIds(uint256)(uint256)" "$i" --rpc-url "$SEPOLIA_RPC_URL")
-    CFG=$(cast call "$PM" "getMembershipInfo(uint256)(uint256,uint256,string,uint256,uint256)" "$TOKEN_ID" --rpc-url "$SEPOLIA_RPC_URL")
+    CFG=$(cast call "$PM" "getMembershipInfo(uint256)((uint256,uint256,string,uint256,uint256))" "$TOKEN_ID" --rpc-url "$SEPOLIA_RPC_URL")
     echo "  [$TOKEN_ID] $CFG"
 done
 echo ""
@@ -218,8 +218,9 @@ else
     else
         # Approve max for simplicity
         echo "  Approving token spend..."
+        MAX_UINT256="0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         send_tx "approve PureMembership to spend tokens" \
-            "$TEST_TOKEN" "approve(address,uint256)" "$PM" "$(cast --to-uint256 max)"
+            "$TEST_TOKEN" "approve(address,uint256)" "$PM" "$MAX_UINT256"
 
         send_tx "buyMembership(2, TEST_TOKEN)" \
             "$PM" "buyMembership(uint256,address)" 2 "$TEST_TOKEN"
@@ -264,13 +265,19 @@ STATUS_L1_AFTER=$(cast call "$PM" "checkMembershipStatus(address,uint256)(bool)"
 STATUS_L2_AFTER=$(cast call "$PM" "checkMembershipStatus(address,uint256)(bool)" "$USER" 2 \
     --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "false")
 
-echo "  Level 1 (Basic) active   : $STATUS_L1_AFTER  (expected: false)"
+echo "  Level 1 (Basic) active   : $STATUS_L1_AFTER  (expected: true if premium purchased, false otherwise)"
 echo "  Level 2 (Premium) active : $STATUS_L2_AFTER  (expected: true if purchased)"
 
 if [ "$CANCELLED_BASIC" = "true" ]; then
-    [ "$STATUS_L1_AFTER" = "false" ] \
-        && echo -e "  ${PASS} Basic correctly inactive after cancellation" \
-        || echo -e "  ${FAIL} Basic still appears active – unexpected"
+    if [ -n "$TEST_TOKEN" ]; then
+        [ "$STATUS_L1_AFTER" = "true" ] \
+            && echo -e "  ${PASS} Basic correctly active after cancellation as premium membership is active" \
+            || echo -e "  ${FAIL} Basic appears inactive – unexpected"
+    else 
+        [ "$STATUS_L1_AFTER" = "false" ] \
+            && echo -e "  ${PASS} Basic correctly inactive after cancellation" \
+            || echo -e "  ${FAIL} Basic still appears active – unexpected"
+    fi
 fi
 if [ "${STATUS_L2:-false}" = "true" ]; then
     [ "$STATUS_L2_AFTER" = "true" ] \
@@ -334,7 +341,8 @@ echo ""
 WITHDREW_REVENUE=false
 REVENUE_TOKEN_WITHDRAWN=""
 
-if [ "${USER,,}" != "${OWNER,,}" ]; then
+# if [ "${USER,,}" != "${OWNER,,}" ]; then
+if [ "$(echo "$USER" | tr '[:upper:]' '[:lower:]')" != "$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" ]; then
     echo -e "  ${YELLOW}You are not the contract owner – skipping revenue withdrawal.${NC}"
     echo ""
 else
@@ -343,11 +351,12 @@ else
     PM_ETH_F=$(cast --to-unit "$PM_ETH_BAL" ether 2>/dev/null || echo "0")
     echo "  Contract ETH balance (revenue): $PM_ETH_F ETH"
 
-    if [ "$PM_ETH_BAL" != "0" ] && [ "$PM_ETH_BAL" != "" ]; then
-        # Withdraw a portion (half) so step 13 can verify reduction
-        WITHDRAW_HALF=$(python3 -c "print(int('$PM_ETH_BAL') // 2)" 2>/dev/null || echo "$PM_ETH_BAL")
+    if [ -z "$TEST_TOKEN" ] && [ "$PM_ETH_BAL" != "0" ] && [ "$PM_ETH_BAL" != "" ]; then
+        # Withdraw a portion (all) so step 13 can verify reduction
+        # WITHDRAW_HALF=$(python3 -c "print(int('$PM_ETH_BAL') // 2)" 2>/dev/null || echo "$PM_ETH_BAL")
+        WITHDRAW_HALF=$(python3 -c "print(int('$PM_ETH_BAL'))" 2>/dev/null || echo "$PM_ETH_BAL")
         WITHDRAW_HALF_F=$(cast --to-unit "$WITHDRAW_HALF" ether 2>/dev/null || echo "?")
-        echo "  Withdrawing half of ETH revenue: $WITHDRAW_HALF_F ETH"
+        echo "  Withdrawing all of ETH revenue: $WITHDRAW_HALF_F ETH"
 
         send_tx "withdrawRevenue(address(0), half)" \
             "$PM" "withdrawRevenue(address,address,uint256)" \
@@ -359,16 +368,110 @@ else
         # Try ERC-20 revenue if TEST_TOKEN is set
         if [ -n "$TEST_TOKEN" ]; then
             TOKEN_REVENUE=$(cast call "$PM" "revenueByToken(address)(uint256)" "$TEST_TOKEN" \
-                --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+                --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")    
+            # Extract only the numeric value (remove scientific notation if present)
+            TOKEN_REVENUE=$(echo "$TOKEN_REVENUE" | awk '{print $1}')
+            TOKEN_REVENUE=${TOKEN_REVENUE:-0}
             if [ "$TOKEN_REVENUE" != "0" ] && [ -n "$TOKEN_REVENUE" ]; then
-                WITHDRAW_HALF=$(python3 -c "print(int('$TOKEN_REVENUE') // 2)" 2>/dev/null || echo "$TOKEN_REVENUE")
-                echo "  ERC-20 revenue for $TEST_TOKEN: $TOKEN_REVENUE  (withdrawing half: $WITHDRAW_HALF)"
-                send_tx "withdrawRevenue(TEST_TOKEN, half)" \
-                    "$PM" "withdrawRevenue(address,address,uint256)" \
-                    "$USER" "$TEST_TOKEN" "$WITHDRAW_HALF"
-                WITHDREW_REVENUE=true
-                REVENUE_TOKEN_WITHDRAWN="$TEST_TOKEN"
-                echo -e "  ${PASS} ERC-20 revenue withdrawal sent"
+                # Calculate USD value to check minimum withdrawal requirement
+                TOKEN_PRICE=$(cast call "$BUCKET_INFO" \
+                    "getTokenPrice(address)(uint256)" \
+                    "$TEST_TOKEN" \
+                    --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+                TOKEN_PRICE=$(echo "$TOKEN_PRICE" | awk '{print $1}')
+                
+                TOKEN_DECIMALS=$(cast call "$TEST_TOKEN" \
+                    "decimals()(uint8)" \
+                    --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "18")
+                TOKEN_DECIMALS=$(echo "$TOKEN_DECIMALS" | awk '{print $1}')
+                
+                # Calculate revenue in USD (8 decimals)
+                TOKEN_REVENUE_USD=$(python3 -c "
+token_bal = int('$TOKEN_REVENUE')
+token_price = int('$TOKEN_PRICE')
+decimals = int('$TOKEN_DECIMALS')
+usd_value = (token_bal * token_price) // (10 ** decimals)
+print(usd_value)
+" 2>/dev/null || echo "0")
+                
+                TOKEN_REVENUE_USD_READABLE=$(python3 -c "print(f'{int(\"$TOKEN_REVENUE_USD\") / 1e8:.2f}')" 2>/dev/null || echo "?")
+                
+                echo "  ERC-20 revenue for $TEST_TOKEN: $TOKEN_REVENUE"
+                echo "  Revenue in USD: \$${TOKEN_REVENUE_USD_READABLE}"
+                
+                # Check if this is first withdrawal and meets minimum
+                TOTAL_WITHDRAWN=$(call_view "totalWithdrawn()(uint256)")
+                TOTAL_WITHDRAWN=$(echo "$TOTAL_WITHDRAWN" | awk '{print $1}')
+                TOTAL_WITHDRAWN=${TOTAL_WITHDRAWN:-0}
+                
+                MIN_WITHDRAWAL_USD=$((100 * 10 ** 8))  # 100 USD with 8 decimals
+                
+                if [ "$TOTAL_WITHDRAWN" = "0" ]; then
+                    echo "  First withdrawal - minimum required: \$100.00 USD"
+                    
+                    if [ "$TOKEN_REVENUE_USD" -lt "$MIN_WITHDRAWAL_USD" ]; then
+                        echo -e "  ${YELLOW}Insufficient revenue for first withdrawal (\$${TOKEN_REVENUE_USD_READABLE} < \$100.00)${NC}"
+                        echo "  Skipping withdrawal test."
+                    else
+                        # Calculate half or minimum amount
+                        WITHDRAW_HALF=$(python3 -c "print(int('$TOKEN_REVENUE') // 2)" 2>/dev/null || echo "$TOKEN_REVENUE")
+                        WITHDRAW_HALF_USD=$(python3 -c "
+token_amount = int('$WITHDRAW_HALF')
+token_price = int('$TOKEN_PRICE')
+decimals = int('$TOKEN_DECIMALS')
+usd_value = (token_amount * token_price) // (10 ** decimals)
+print(usd_value)
+" 2>/dev/null || echo "0")
+                        
+                        # Ensure withdrawal meets minimum
+                        if [ "$WITHDRAW_HALF_USD" -lt "$MIN_WITHDRAWAL_USD" ]; then
+                            # Calculate minimum token amount needed for $100
+                            WITHDRAW_AMOUNT=$(python3 -c "
+min_usd = $MIN_WITHDRAWAL_USD
+token_price = int('$TOKEN_PRICE')
+decimals = int('$TOKEN_DECIMALS')
+tokens_needed = (min_usd * (10 ** decimals)) // token_price
+print(tokens_needed)
+" 2>/dev/null || echo "$TOKEN_REVENUE")
+                            WITHDRAW_AMOUNT_READABLE=$(python3 -c "print(f'{int(\"$WITHDRAW_AMOUNT\") / (10 ** int(\"$TOKEN_DECIMALS\")):.6f}')" 2>/dev/null || echo "?")
+                            echo "  Withdrawing minimum: $WITHDRAW_AMOUNT_READABLE tokens (\$100.00 USD)"
+                        else
+                            WITHDRAW_AMOUNT="$WITHDRAW_HALF"
+                            WITHDRAW_AMOUNT_READABLE=$(python3 -c "print(f'{int(\"$WITHDRAW_AMOUNT\") / (10 ** int(\"$TOKEN_DECIMALS\")):.6f}')" 2>/dev/null || echo "?")
+                            echo "  Withdrawing half: $WITHDRAW_AMOUNT_READABLE tokens"
+                        fi
+                        
+                        send_tx "withdrawRevenue(TEST_TOKEN, $WITHDRAW_AMOUNT_READABLE)" \
+                            "$PM" "withdrawRevenue(address,address,uint256)" \
+                            "$USER" "$TEST_TOKEN" "$WITHDRAW_AMOUNT"
+                        WITHDREW_REVENUE=true
+                        REVENUE_TOKEN_WITHDRAWN="$TEST_TOKEN"
+                        echo -e "  ${PASS} ERC-20 revenue withdrawal sent"
+                    fi
+                else
+                    # Not first withdrawal - withdraw total balance instead of half
+                    TOKEN_BALANCE=$(cast call "$TEST_TOKEN" \
+                        "balanceOf(address)(uint256)" \
+                        "$PM" \
+                        --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+                    TOKEN_BALANCE=$(echo "$TOKEN_BALANCE" | awk '{print $1}')
+                    TOKEN_BALANCE=${TOKEN_BALANCE:-0}
+                    
+                    if [ "$TOKEN_BALANCE" = "0" ]; then
+                        echo -e "  ${YELLOW}No token balance to withdraw${NC}"
+                    else
+                        WITHDRAW_AMOUNT="$TOKEN_BALANCE"
+                        WITHDRAW_AMOUNT_READABLE=$(python3 -c "print(f'{int(\"$WITHDRAW_AMOUNT\") / (10 ** int(\"$TOKEN_DECIMALS\")):.6f}')" 2>/dev/null || echo "?")
+                        echo "  Withdrawing total balance: $WITHDRAW_AMOUNT_READABLE tokens"
+                        
+                        send_tx "withdrawRevenue(TEST_TOKEN, total balance)" \
+                            "$PM" "withdrawRevenue(address,address,uint256)" \
+                            "$USER" "$TEST_TOKEN" "$WITHDRAW_AMOUNT"
+                        WITHDREW_REVENUE=true
+                        REVENUE_TOKEN_WITHDRAWN="$TEST_TOKEN"
+                        echo -e "  ${PASS} ERC-20 revenue withdrawal sent"
+                    fi
+                fi
             else
                 echo "  No revenue to withdraw yet."
             fi
@@ -400,19 +503,32 @@ sys.exit(0 if after < before else 1)
             && echo -e "  ${PASS} ETH balance reduced after withdrawal" \
             || echo -e "  ${FAIL} ETH balance did not decrease – check transaction"
     else
-        TOKEN_REVENUE_AFTER=$(cast call "$PM" "revenueByToken(address)(uint256)" "$REVENUE_TOKEN_WITHDRAWN" \
+        TOKEN_BALANCE_AFTER=$(cast call "$TEST_TOKEN" \
+            "balanceOf(address)(uint256)" \
+            "$PM" \
             --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
-        echo "  ERC-20 revenue before : $TOKEN_REVENUE"
-        echo "  ERC-20 revenue after  : $TOKEN_REVENUE_AFTER"
+        TOKEN_BALANCE_AFTER=$(echo "$TOKEN_BALANCE_AFTER" | awk '{print $1}')
+        TOKEN_BALANCE_AFTER=${TOKEN_BALANCE_AFTER:-0}
+        
+        # Get the balance before withdrawal (stored earlier in TOKEN_REVENUE)
+        TOKEN_BALANCE_BEFORE="$TOKEN_REVENUE"
+        
+        # Format for display
+        TOKEN_BAL_BEFORE_READABLE=$(python3 -c "print(f'{int(\"$TOKEN_BALANCE_BEFORE\") / (10 ** int(\"$TOKEN_DECIMALS\")):.6f}')" 2>/dev/null || echo "?")
+        TOKEN_BAL_AFTER_READABLE=$(python3 -c "print(f'{int(\"$TOKEN_BALANCE_AFTER\") / (10 ** int(\"$TOKEN_DECIMALS\")):.6f}')" 2>/dev/null || echo "?")
+        
+        echo "  ERC-20 contract balance before : $TOKEN_BAL_BEFORE_READABLE tokens ($TOKEN_BALANCE_BEFORE)"
+        echo "  ERC-20 contract balance after  : $TOKEN_BAL_AFTER_READABLE tokens ($TOKEN_BALANCE_AFTER)"
+        
         DECREASED=$(python3 -c "
 import sys
-before = int('$TOKEN_REVENUE')
-after  = int('$TOKEN_REVENUE_AFTER')
+before = int('$TOKEN_BALANCE_BEFORE')
+after  = int('$TOKEN_BALANCE_AFTER')
 sys.exit(0 if after < before else 1)
 " 2>/dev/null && echo "true" || echo "false")
         [ "$DECREASED" = "true" ] \
-            && echo -e "  ${PASS} ERC-20 revenue reduced after withdrawal" \
-            || echo -e "  ${FAIL} ERC-20 revenue did not decrease – check transaction"
+            && echo -e "  ${PASS} ERC-20 balance reduced after withdrawal" \
+            || echo -e "  ${FAIL} ERC-20 balance did not decrease – check transaction"
     fi
 else
     echo "  No withdrawal was performed – skipping post-withdrawal revenue check."
@@ -440,18 +556,18 @@ echo "  Contract on Etherscan:"
 echo "  https://sepolia.etherscan.io/address/$PM"
 echo ""
 echo "  Tests run:"
-echo "  ${PASS} 1.  Contract state & tier configs read"
-echo "  ${PASS} 2.  Existing memberships checked"
-[ "$BOUGHT_BASIC"      = "true"  ] && echo "  ${PASS} 3.  Bought Basic membership (ETH)"        || echo "  -    3.  Bought Basic membership (skipped – insufficient ETH)"
-[ "$STATUS_L1"         = "true"  ] && echo "  ${PASS} 4.  Level-1 status verified"              || echo "  -    4.  Level-1 status (not purchased)"
-[ -n "$TEST_TOKEN"               ] && echo "  ${PASS} 5.  ERC-20 Premium purchase attempted"    || echo "  -    5.  ERC-20 purchase (TEST_TOKEN_ADDRESS not set)"
-echo "  ${PASS} 6.  Revenue accumulated checked"
-[ "$CANCELLED_BASIC"   = "true"  ] && echo "  ${PASS} 7.  Basic membership cancelled"          || echo "  -    7.  Basic cancellation skipped"
-[ "$CANCELLED_BASIC"   = "true"  ] && echo "  ${PASS} 8.  Status verified after Basic cancel"  || echo "  -    8.  Post-cancel status check skipped"
-[ "$CANCELLED_PREMIUM" = "true"  ] && echo "  ${PASS} 9.  Premium membership cancelled"        || echo "  -    9.  Premium cancellation skipped"
-[ "$CANCELLED_PREMIUM" = "true"  ] && echo "  ${PASS} 10. Status verified after all cancels"   || echo "  -    10. Post-all-cancel status check skipped"
-echo "  ${PASS} 11. Revenue re-checked (unchanged by cancellations)"
-[ "$WITHDREW_REVENUE"  = "true"  ] && echo "  ${PASS} 12. Revenue withdrawal succeeded"        || echo "  -    12. Revenue withdrawal skipped (not owner or no revenue)"
-[ "$WITHDREW_REVENUE"  = "true"  ] && echo "  ${PASS} 13. Revenue balance verified after withdrawal" || echo "  -    13. Post-withdrawal revenue check skipped"
-echo "  ${PASS} 14. Final state summary"
+echo -e "  ${PASS} 1.  Contract state & tier configs read"
+echo -e "  ${PASS} 2.  Existing memberships checked"
+[ "$BOUGHT_BASIC"      = "true"  ] && echo -e "  ${PASS} 3.  Bought Basic membership (ETH)"        || echo "  -    3.  Bought Basic membership (skipped – insufficient ETH)"
+[ "$STATUS_L1"         = "true"  ] && echo -e "  ${PASS} 4.  Level-1 status verified"              || echo "  -    4.  Level-1 status (not purchased)"
+[ -n "$TEST_TOKEN"               ] && echo -e "  ${PASS} 5.  ERC-20 Premium purchase attempted"    || echo "  -    5.  ERC-20 purchase (TEST_TOKEN_ADDRESS not set)"
+echo -e "  ${PASS} 6.  Revenue accumulated checked"
+[ "$CANCELLED_BASIC"   = "true"  ] && echo -e "  ${PASS} 7.  Basic membership cancelled"          || echo "  -    7.  Basic cancellation skipped"
+[ "$CANCELLED_BASIC"   = "true"  ] && echo -e "  ${PASS} 8.  Status verified after Basic cancel"  || echo "  -    8.  Post-cancel status check skipped"
+[ "$CANCELLED_PREMIUM" = "true"  ] && echo -e "  ${PASS} 9.  Premium membership cancelled"        || echo "  -    9.  Premium cancellation skipped"
+[ "$CANCELLED_PREMIUM" = "true"  ] && echo -e "  ${PASS} 10. Status verified after all cancels"   || echo "  -    10. Post-all-cancel status check skipped"
+echo -e "  ${PASS} 11. Revenue re-checked (unchanged by cancellations)"
+[ "$WITHDREW_REVENUE"  = "true"  ] && echo -e "  ${PASS} 12. Revenue withdrawal succeeded"        || echo "  -    12. Revenue withdrawal skipped (not owner or no revenue)"
+[ "$WITHDREW_REVENUE"  = "true"  ] && echo -e "  ${PASS} 13. Revenue balance verified after withdrawal" || echo "  -    13. Post-withdrawal revenue check skipped"
+echo -e "  ${PASS} 14. Final state summary"
 echo ""

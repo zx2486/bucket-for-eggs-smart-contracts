@@ -57,7 +57,7 @@ forge script script/DeployPureMembershipSepolia.s.sol \
     --verify \
     --etherscan-api-key $ETHERSCAN_API_KEY \
     -vvv
-// Extract the new proxy and implementation address from the broadcast output
+# Extract the new proxy and implementation address from the broadcast output
 PROXY_ADDRESS=$(grep "Deployed to:" broadcast/DeployPureMembershipSepolia.s.sol.txt | awk '{print $3}')
 IMPLEMENTATION_ADDRESS=$(grep "Implementation:" broadcast/DeployPureMembershipSepolia.s.sol.txt | awk '{print $2}')
 echo "New PureMembership Proxy Address: $PROXY_ADDRESS"
