@@ -13,7 +13,7 @@ import {BucketInfo} from "../src/BucketInfo.sol";
 contract VerifyBucketInfo is Script {
     function run() external view {
         // Read the deployed contract address from environment variable or argument
-        address bucketInfoAddress = vm.envAddress("BUCKETINFO_ADDRESS");
+        address payable bucketInfoAddress = payable(vm.envAddress("BUCKETINFO_ADDRESS"));
 
         BucketInfo bucketInfo = BucketInfo(bucketInfoAddress);
 
