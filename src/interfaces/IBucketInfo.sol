@@ -40,4 +40,8 @@ interface IBucketInfo {
 
     /// @notice Platform fee in basis points
     function platformFee() external view returns (uint256);
+
+    /// @notice Get the owner of the BucketInfo contract
+    /// @return The owner address
+    function owner() external view returns (address);
 }

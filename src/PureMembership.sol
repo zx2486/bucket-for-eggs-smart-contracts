@@ -110,6 +110,7 @@ contract PureMembership is
     event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
     event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
     event TokensRecovered(address indexed token, address indexed to, uint256 amount);
+    event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -126,6 +127,7 @@ contract PureMembership is
     error InsufficientContractBalance(uint256 requested, uint256 available);
     error ETHTransferFailed();
     error CannotRecoverWhitelistedToken(address token);
+    error UnauthorizedBucketInfoUpdate();
 
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
@@ -466,6 +468,24 @@ contract PureMembership is
         }
 
         emit TokensRecovered(token, to, amount);
+    }
+
+    /**
+     * @notice Update the BucketInfo contract address
+     * @dev Can only be called by the current owner of the BucketInfo contract
+     * @param newBucketInfo The new BucketInfo contract address
+     */
+    function updateBucketInfo(address newBucketInfo) external {
+        if (newBucketInfo == address(0)) revert ZeroAddress();
+
+        // Only the current BucketInfo owner can update
+        address bucketInfoOwner = IBucketInfo(address(bucketInfo)).owner();
+        if (msg.sender != bucketInfoOwner) revert UnauthorizedBucketInfoUpdate();
+
+        address oldBucketInfo = address(bucketInfo);
+        bucketInfo = IBucketInfo(newBucketInfo);
+
+        emit BucketInfoUpdated(oldBucketInfo, newBucketInfo, msg.sender);
     }
 
     /*//////////////////////////////////////////////////////////////

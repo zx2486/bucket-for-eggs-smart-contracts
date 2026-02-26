@@ -15,6 +15,15 @@ contract MockBucketInfoForMembership {
     address[] public whitelistedList;
     bool public operational = true;
     uint256 public feeRate = 100; // 1%
+    address public owner;
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function setOwner(address newOwner) external {
+        owner = newOwner;
+    }
 
     function isTokenValid(address token) external view returns (bool) {
         return whitelisted[token] && operational;
@@ -156,6 +165,7 @@ contract PureMembershipTest is Test {
     );
     event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
     event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
+    event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
 
     function setUp() public {
         owner = address(this);
@@ -564,6 +574,64 @@ contract PureMembershipTest is Test {
         vm.prank(user1);
         vm.expectRevert();
         membership.pause();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    UPDATE BUCKETINFO TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_UpdateBucketInfo() public {
+        // Create new BucketInfo
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+        newBucketInfo.addToken(address(payToken), PAY_TOKEN_PRICE);
+
+        address oldBucketInfo = address(membership.bucketInfo());
+
+        // Set bucketInfo owner to owner (test contract)
+        bucketInfo.setOwner(owner);
+
+        // Update BucketInfo - should only work from bucketInfo owner
+        vm.expectEmit(true, true, true, true);
+        emit BucketInfoUpdated(oldBucketInfo, address(newBucketInfo), owner);
+
+        membership.updateBucketInfo(address(newBucketInfo));
+
+        assertEq(address(membership.bucketInfo()), address(newBucketInfo));
+    }
+
+    function test_UpdateBucketInfoFromBucketInfoOwner() public {
+        // Create new BucketInfo
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        // Set bucketInfo owner to user1
+        bucketInfo.setOwner(user1);
+
+        // user1 should be able to update
+        vm.prank(user1);
+        membership.updateBucketInfo(address(newBucketInfo));
+
+        assertEq(address(membership.bucketInfo()), address(newBucketInfo));
+    }
+
+    function test_RevertUpdateBucketInfoUnauthorized() public {
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+
+        // Set bucketInfo owner to owner (test contract)
+        bucketInfo.setOwner(owner);
+
+        // user1 is not bucketInfo owner, should revert
+        vm.prank(user1);
+        vm.expectRevert(PureMembership.UnauthorizedBucketInfoUpdate.selector);
+        membership.updateBucketInfo(address(newBucketInfo));
+    }
+
+    function test_RevertUpdateBucketInfoZeroAddress() public {
+        bucketInfo.setOwner(owner);
+
+        vm.expectRevert(PureMembership.ZeroAddress.selector);
+        membership.updateBucketInfo(address(0));
     }
 
     /*//////////////////////////////////////////////////////////////
