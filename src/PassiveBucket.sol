@@ -190,6 +190,7 @@ contract PassiveBucket is
     event DexConfigured(uint8 indexed dexId, address router, address quoter, bool enabled);
     event WETHUpdated(address indexed weth);
     event RebalanceFeesUpdated(uint256 ownerFeeBps, uint256 callerFeeBps);
+    event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -213,6 +214,7 @@ contract PassiveBucket is
     error ValueLossTooHigh(uint256 valueBefore, uint256 valueAfter);
     error DistributionMismatch(address token, uint256 actual, uint256 target);
     error CannotRecoverWhitelistedToken(address token);
+    error UnauthorizedBucketInfoUpdate();
 
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
@@ -278,8 +280,8 @@ contract PassiveBucket is
         bucketInfo = IBucketInfo(bucketInfoAddr);
         oneInchRouter = _oneInchRouter;
 
-        rebalanceOwnerFeeBps = 300; // 3% default
-        rebalanceCallerFeeBps = 100; // 1% default
+        rebalanceOwnerFeeBps = 600; // 6% default
+        rebalanceCallerFeeBps = 300; // 3% default
 
         _validateAndStoreDistributions(distributions);
     }
@@ -520,7 +522,7 @@ contract PassiveBucket is
     /**
      * @notice Rebalance the portfolio via 1inch aggregation router
      * @dev Callable by any shareholder. Value loss must be < 0.5%.
-     *      Fees: 2% of increase to owner, 2% to caller.
+     *      Fees: 6% of increase to owner, 3% to caller.
      * @param swapCalldata The encoded calldata for the 1inch router
      */
     function rebalanceBy1inch(bytes calldata swapCalldata)
@@ -645,6 +647,24 @@ contract PassiveBucket is
         rebalanceOwnerFeeBps = _ownerFeeBps;
         rebalanceCallerFeeBps = _callerFeeBps;
         emit RebalanceFeesUpdated(_ownerFeeBps, _callerFeeBps);
+    }
+
+    /**
+     * @notice Update the BucketInfo contract address
+     * @dev Can only be called by the current owner of the BucketInfo contract
+     * @param newBucketInfo The new BucketInfo contract address
+     */
+    function updateBucketInfo(address newBucketInfo) external {
+        if (newBucketInfo == address(0)) revert ZeroAddress();
+
+        // Only the current BucketInfo owner can update
+        address bucketInfoOwner = IBucketInfo(address(bucketInfo)).owner();
+        if (msg.sender != bucketInfoOwner) revert UnauthorizedBucketInfoUpdate();
+
+        address oldBucketInfo = address(bucketInfo);
+        bucketInfo = IBucketInfo(newBucketInfo);
+
+        emit BucketInfoUpdated(oldBucketInfo, newBucketInfo, msg.sender);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -924,23 +944,14 @@ contract PassiveBucket is
         uint256 callerFeeBps
     ) internal returns (uint256) {
         bool accountable = isBucketAccountable();
+        // Calculate new token price (pre-fee-minting)
+        uint256 newPrice = (totalValueAfter * PRECISION) / totalSupply();
+        uint256 valueDifference = totalValueAfter > totalValueBefore
+            ? totalValueAfter - totalValueBefore
+            : totalValueBefore - totalValueAfter;
 
         if (totalValueAfter > totalValueBefore) {
             uint256 increase = totalValueAfter - totalValueBefore;
-
-            // Calculate new token price (pre-fee-minting)
-            uint256 newPrice = (totalValueAfter * PRECISION) / totalSupply();
-
-            // Platform fee to BucketInfo
-            uint256 platformFeeValue = bucketInfo.calculateFee(increase);
-            if (platformFeeValue > 0 && newPrice > 0) {
-                uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
-                if (platformShares > 0) {
-                    _mint(address(bucketInfo), platformShares);
-                    emit RebalanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
-                }
-            }
-
             if (accountable) {
                 // Owner fee
                 uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
@@ -964,7 +975,7 @@ contract PassiveBucket is
         } else if (totalValueAfter < totalValueBefore) {
             uint256 decrease = totalValueBefore - totalValueAfter;
 
-            // Owner bears 4% of decrease (burned from owner shares)
+            // Owner bears some of the decrease (burned from owner shares)
             if (accountable) {
                 uint256 penaltyValue = (decrease * (callerFeeBps + ownerFeeBps)) / BPS_DENOMINATOR;
                 uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
@@ -978,6 +989,16 @@ contract PassiveBucket is
                     _burn(owner(), sharesToBurn);
                     emit OwnerPenaltyBurned(owner(), sharesToBurn, penaltyValue);
                 }
+            }
+        }
+
+        // Platform fee to BucketInfo
+        uint256 platformFeeValue = bucketInfo.calculateFee(valueDifference);
+        if (platformFeeValue > 0 && newPrice > 0) {
+            uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
+            if (platformShares > 0) {
+                _mint(address(bucketInfo), platformShares);
+                emit RebalanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
             }
         }
 

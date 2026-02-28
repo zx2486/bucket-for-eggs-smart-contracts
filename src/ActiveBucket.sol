@@ -102,6 +102,7 @@ contract ActiveBucket is
     event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUsd);
     event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUsd);
     event PerformanceFeeUpdated(uint256 newFeeBps);
+    event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -121,6 +122,7 @@ contract ActiveBucket is
     error InsufficientBalance();
     error InsufficientRepayment(uint256 expected, uint256 actual);
     error CannotRecoverWhitelistedToken(address token);
+    error UnauthorizedBucketInfoUpdate();
 
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
@@ -173,7 +175,7 @@ contract ActiveBucket is
         bucketInfo = IBucketInfo(bucketInfoAddr);
         oneInchRouter = _oneInchRouter;
 
-        performanceFeeBps = 500; // 5% default
+        performanceFeeBps = 1400; // 14% default
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -425,6 +427,24 @@ contract ActiveBucket is
         emit PerformanceFeeUpdated(_performanceFeeBps);
     }
 
+    /**
+     * @notice Update the BucketInfo contract address
+     * @dev Can only be called by the current owner of the BucketInfo contract
+     * @param newBucketInfo The new BucketInfo contract address
+     */
+    function updateBucketInfo(address newBucketInfo) external {
+        if (newBucketInfo == address(0)) revert ZeroAddress();
+
+        // Only the current BucketInfo owner can update
+        address bucketInfoOwner = IBucketInfo(address(bucketInfo)).owner();
+        if (msg.sender != bucketInfoOwner) revert UnauthorizedBucketInfoUpdate();
+
+        address oldBucketInfo = address(bucketInfo);
+        bucketInfo = IBucketInfo(newBucketInfo);
+
+        emit BucketInfoUpdated(oldBucketInfo, newBucketInfo, msg.sender);
+    }
+
     /*//////////////////////////////////////////////////////////////
                           VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -490,23 +510,15 @@ contract ActiveBucket is
         uint256 ownerFeeBps,
         uint256 tokenTotalSupply
     ) internal returns (uint256) {
+        // Calculate new token price (pre-fee-minting)
+        uint256 newPrice = (totalValueAfter * PRECISION) / tokenTotalSupply;
+        uint256 valueDifference = totalValueAfter > totalValueBefore
+            ? totalValueAfter - totalValueBefore
+            : totalValueBefore - totalValueAfter;
+        // provide performance fee or penalty only when owner is accountable (holding >= 5% of total supply)
         if ((balanceOf(owner()) * BPS_DENOMINATOR) / tokenTotalSupply >= MIN_OWNER_BPS) {
-            // provide performance fee or penalty only when owner is accountable (holding >= 5% of total supply)
             if (totalValueAfter > totalValueBefore) {
                 uint256 increase = totalValueAfter - totalValueBefore;
-
-                // Calculate new token price (pre-fee-minting)
-                uint256 newPrice = (totalValueAfter * PRECISION) / tokenTotalSupply;
-
-                // Platform fee to BucketInfo
-                uint256 platformFeeValue = bucketInfo.calculateFee(increase);
-                if (platformFeeValue > 0 && newPrice > 0) {
-                    uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
-                    if (platformShares > 0) {
-                        _mint(address(bucketInfo), platformShares);
-                        emit PerformanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
-                    }
-                }
 
                 // Owner fee
                 uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
@@ -520,7 +532,7 @@ contract ActiveBucket is
             } else if (totalValueAfter < totalValueBefore) {
                 uint256 decrease = totalValueBefore - totalValueAfter;
 
-                // Owner bears 5% of decrease (burned from owner shares)
+                // Owner bears some of decrease (burned from owner shares)
                 uint256 penaltyValue = (decrease * performanceFeeBps) / BPS_DENOMINATOR;
                 uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
                 uint256 sharesToBurn = (penaltyValue * PRECISION) / currentPrice;
@@ -536,6 +548,15 @@ contract ActiveBucket is
             }
         }
 
+        // Platform fee to BucketInfo
+        uint256 platformFeeValue = bucketInfo.calculateFee(valueDifference);
+        if (platformFeeValue > 0 && newPrice > 0) {
+            uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
+            if (platformShares > 0) {
+                _mint(address(bucketInfo), platformShares);
+                emit PerformanceFeeDistributed(address(bucketInfo), platformShares, platformFeeValue);
+            }
+        }
         // Update token price to reflect new state
         return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
     }

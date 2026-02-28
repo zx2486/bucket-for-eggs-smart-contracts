@@ -108,6 +108,8 @@ fi
 
 # Total value
 TOTAL_VALUE=$(call_view "calculateTotalValue()(uint256)")
+# Extract only the numeric value (remove scientific notation if present)
+TOTAL_VALUE=$(echo "$TOTAL_VALUE" | awk '{print $1}')
 echo "  Total Portfolio Value (USD 8 dec): $TOTAL_VALUE"
 echo ""
 
@@ -198,6 +200,10 @@ echo "  Total value before  : $TOTAL_VALUE"
 echo "  Total value after   : $TOTAL_VALUE_AFTER"
 echo "  Total deposit value : $TOTAL_DEPOSIT_AFTER"
 
+# Extract only the numeric value (remove scientific notation if present)
+TOTAL_VALUE_AFTER=$(echo "$TOTAL_VALUE_AFTER" | awk '{print $1}')
+TOTAL_DEPOSIT_AFTER=$(echo "$TOTAL_DEPOSIT_AFTER" | awk '{print $1}')
+
 if [ "$DEPOSITED_ETH" = "true" ] || [ "$DEPOSITED_ERC20" = "true" ]; then
     if python3 -c "import sys; sys.exit(0 if int('${TOTAL_VALUE_AFTER:-0}') > int('${TOTAL_VALUE:-0}') else 1)" 2>/dev/null; then
         echo -e "  ${PASS} Total value increased after deposit"
@@ -228,7 +234,7 @@ echo ""
 
 CURRENT_SHARES=$(cast call "$AB" "balanceOf(address)(uint256)" "$USER" --rpc-url "$SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
 echo "  Current shares: $CURRENT_SHARES"
-
+CURRENT_SHARES=$(echo "$CURRENT_SHARES" | awk '{print $1}')
 REDEEMED=false
 if [ "$CURRENT_SHARES" != "0" ] && [ -n "$CURRENT_SHARES" ]; then
     # Redeem 10% of shares
@@ -258,6 +264,7 @@ echo "  Shares before redeem  : $CURRENT_SHARES"
 echo "  Shares after redeem   : $SHARES_POST_REDEEM"
 echo "  Total withdraw value  : $TOTAL_WITHDRAW_AFTER"
 
+SHARES_POST_REDEEM=$(echo "$SHARES_POST_REDEEM" | awk '{print $1}')
 if [ "$REDEEMED" = "true" ]; then
     if python3 -c "import sys; sys.exit(0 if int('$SHARES_POST_REDEEM') < int('$CURRENT_SHARES') else 1)" 2>/dev/null; then
         echo -e "  ${PASS} Shares decreased after redemption"
@@ -271,7 +278,8 @@ echo ""
 echo -e "${YELLOW}Step 9: Pause / unpause cycle (owner only)${NC}"
 echo ""
 
-if [ "${USER,,}" != "${OWNER,,}" ]; then
+#if [ "${USER,,}" != "${OWNER,,}" ]; then
+if [ "$(echo "$USER" | tr '[:upper:]' '[:lower:]')" != "$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" ]; then
     echo -e "  ${YELLOW}You are not the contract owner – skipping pause test.${NC}"
     echo ""
 else
@@ -329,15 +337,15 @@ echo "  Contract on Etherscan:"
 echo "  https://sepolia.etherscan.io/address/$AB"
 echo ""
 echo "  Tests run:"
-echo "  ${PASS} 1.  Contract state read"
-[ "$DEPOSITED_ETH"    = "true" ] && echo "  ${PASS} 2.  Deposited ETH"                || echo "  -    2.  ETH deposit (skipped – insufficient ETH)"
-[ "$DEPOSITED_ETH"    = "true" ] && echo "  ${PASS} 3.  Shares verified after deposit" || echo "  -    3.  Shares verification (no deposit)"
-[ "$DEPOSITED_ERC20"  = "true" ] && echo "  ${PASS} 4.  Deposited ERC-20"              || echo "  -    4.  ERC-20 deposit (skipped)"
-echo "  ${PASS} 5.  Total value checked"
-echo "  ${PASS} 6.  Performance fee checked"
-[ "$REDEEMED"         = "true" ] && echo "  ${PASS} 7.  Redeemed shares"               || echo "  -    7.  Redemption (skipped – no shares)"
-[ "$REDEEMED"         = "true" ] && echo "  ${PASS} 8.  Balance verified after redeem"  || echo "  -    8.  Post-redeem verification (skipped)"
-echo "  ${PASS} 9.  Pause/unpause cycle"
-echo "  ${PASS} 10. Accountability check"
-echo "  ${PASS} 11. Final summary"
+echo -e "  ${PASS} 1.  Contract state read"
+[ "$DEPOSITED_ETH"    = "true" ] && echo -e "  ${PASS} 2.  Deposited ETH"                || echo -e "  -    2.  ETH deposit (skipped – insufficient ETH)"
+[ "$DEPOSITED_ETH"    = "true" ] && echo -e "  ${PASS} 3.  Shares verified after deposit" || echo -e "  -    3.  Shares verification (no deposit)"
+[ "$DEPOSITED_ERC20"  = "true" ] && echo -e "  ${PASS} 4.  Deposited ERC-20"              || echo -e "  -    4.  ERC-20 deposit (skipped)"
+echo -e "  ${PASS} 5.  Total value checked"
+echo -e "  ${PASS} 6.  Performance fee checked"
+[ "$REDEEMED"         = "true" ] && echo -e "  ${PASS} 7.  Redeemed shares"               || echo -e "  -    7.  Redemption (skipped – no shares)"
+[ "$REDEEMED"         = "true" ] && echo -e "  ${PASS} 8.  Balance verified after redeem"  || echo -e "  -    8.  Post-redeem verification (skipped)"
+echo -e "  ${PASS} 9.  Pause/unpause cycle"
+echo -e "  ${PASS} 10. Accountability check"
+echo -e "  ${PASS} 11. Final summary"
 echo ""

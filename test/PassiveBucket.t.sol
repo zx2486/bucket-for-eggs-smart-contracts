@@ -15,6 +15,15 @@ contract MockBucketInfoForPassive {
     address[] public whitelistedList;
     bool public operational = true;
     uint256 public feeRate = 100; // 1%
+    address public owner;
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function setOwner(address _owner) external {
+        owner = _owner;
+    }
 
     function isTokenValid(address token) external view returns (bool) {
         return whitelisted[token] && operational;
@@ -797,6 +806,49 @@ contract PassiveBucketTest is Test {
         vm.prank(user1);
         (bool success,) = address(bucket).call{value: 1 ether}("");
         assertTrue(success);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    UPDATE BUCKET INFO TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_UpdateBucketInfo() public {
+        // Deploy a new mock BucketInfo
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        // Owner of current bucketInfo is this contract (deployed in setUp)
+        bucket.updateBucketInfo(address(newBucketInfo));
+
+        assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
+    }
+
+    function test_UpdateBucketInfoFromBucketInfoOwner() public {
+        // Transfer BucketInfo ownership to user1
+        bucketInfo.setOwner(user1);
+
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        // user1 (the BucketInfo owner) can update
+        vm.prank(user1);
+        bucket.updateBucketInfo(address(newBucketInfo));
+
+        assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
+    }
+
+    function test_RevertUpdateBucketInfoUnauthorized() public {
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+
+        // user1 is NOT the BucketInfo owner
+        vm.prank(user1);
+        vm.expectRevert(PassiveBucket.UnauthorizedBucketInfoUpdate.selector);
+        bucket.updateBucketInfo(address(newBucketInfo));
+    }
+
+    function test_RevertUpdateBucketInfoZeroAddress() public {
+        vm.expectRevert(PassiveBucket.ZeroAddress.selector);
+        bucket.updateBucketInfo(address(0));
     }
 
     // Allow test contract (owner) to receive ETH from redeem

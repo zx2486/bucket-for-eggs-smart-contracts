@@ -324,7 +324,8 @@ echo ""
 echo -e "${YELLOW}Step 10: Pause / unpause cycle (owner only)${NC}"
 echo ""
 
-if [ "${USER,,}" != "${OWNER,,}" ]; then
+#if [ "${USER,,}" != "${OWNER,,}" ]; then
+if [ "$(echo "$USER" | tr '[:upper:]' '[:lower:]')" != "$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" ]; then
     echo -e "  ${YELLOW}You are not the contract owner – skipping pause test.${NC}"
     echo ""
 else
