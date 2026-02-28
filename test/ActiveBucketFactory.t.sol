@@ -216,7 +216,7 @@ contract ActiveBucketFactoryTest is Test {
     function test_Create_DefaultPerformanceFee() public {
         address proxy = factory.createActiveBucket(address(bucketInfo), mockOneInch, NAME, SYMBOL);
         ActiveBucket ab = ActiveBucket(payable(proxy));
-        assertEq(ab.performanceFeeBps(), 500); // 5% default
+        assertEq(ab.performanceFeeBps(), 1400); // 14% default
     }
 
     function test_Create_ZeroBucketInfoReverts() public {
