@@ -297,7 +297,7 @@ contract ActiveBucket is
         // Send performance fee to BucketInfo and owner
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply, totalValueAfter, performanceFeeBps, tokenTotalSupply
+            beforeTokenPrice * tokenTotalSupply / PRECISION, totalValueAfter, performanceFeeBps, tokenTotalSupply
         );
 
         emit SwapExecuted(msg.sender, totalValueBefore, totalValueAfter, tokenPrice);
@@ -347,7 +347,7 @@ contract ActiveBucket is
         uint256 totalValueAfterLoan = _calculateTotalValue();
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply, totalValueAfterLoan, performanceFeeBps, tokenTotalSupply
+            beforeTokenPrice * tokenTotalSupply / PRECISION, totalValueAfterLoan, performanceFeeBps, tokenTotalSupply
         );
 
         emit FlashLoan(msg.sender, receiver, token, amount, fee);
@@ -521,9 +521,10 @@ contract ActiveBucket is
                 uint256 increase = totalValueAfter - totalValueBefore;
 
                 // Owner fee
-                uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
+                uint256 ownerFeeValue = (increase * ownerFeeBps * PRECISION) / BPS_DENOMINATOR;
                 if (ownerFeeValue > 0 && newPrice > 0) {
-                    uint256 ownerShares = (ownerFeeValue * PRECISION) / newPrice;
+                    uint256 ownerShares = (ownerFeeValue) / newPrice;
+                    ownerFeeValue = ownerFeeValue / PRECISION; // adjust back to USD value for event
                     if (ownerShares > 0) {
                         _mint(owner(), ownerShares);
                         emit PerformanceFeeDistributed(owner(), ownerShares, ownerFeeValue);
@@ -533,9 +534,9 @@ contract ActiveBucket is
                 uint256 decrease = totalValueBefore - totalValueAfter;
 
                 // Owner bears some of decrease (burned from owner shares)
-                uint256 penaltyValue = (decrease * performanceFeeBps) / BPS_DENOMINATOR;
-                uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
-                uint256 sharesToBurn = (penaltyValue * PRECISION) / currentPrice;
+                uint256 penaltyValue = (decrease * performanceFeeBps * PRECISION) / BPS_DENOMINATOR;
+                uint256 sharesToBurn = (penaltyValue) / newPrice;
+                penaltyValue = penaltyValue / PRECISION; // adjust back to USD value for event
                 uint256 ownerBalance = balanceOf(owner());
 
                 if (sharesToBurn > ownerBalance) {

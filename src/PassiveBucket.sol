@@ -19,7 +19,7 @@ import {IBucketInfo} from "./interfaces/IBucketInfo.sol";
 
 /**
  * @title ISwapRouter
- * @dev Interface for Uniswap V3 style SwapRouter
+ * @dev Interface for Uniswap V3 SwapRouter02
  */
 interface ISwapRouter {
     struct ExactInputSingleParams {
@@ -37,7 +37,7 @@ interface ISwapRouter {
 
 /**
  * @title IQuoter
- * @dev Interface for Uniswap V3 style Quoter
+ * @dev Interface for Uniswap V3 QuoterV2
  */
 interface IQuoter {
     struct QuoteExactInputSingleParams {
@@ -58,11 +58,13 @@ interface IQuoter {
  * @dev Interface for Wrapped Ether
  */
 interface IWETH {
-    function deposit() external payable;
-
     function withdraw(uint256) external;
 
+    function deposit() external payable;
+
     function balanceOf(address) external view returns (uint256);
+
+    function approve(address, uint256) external returns (bool);
 }
 
 /**
@@ -446,24 +448,36 @@ contract PassiveBucket is
         uint256 totalValueBefore = _calculateTotalValue();
         uint256 beforeTokenPrice = tokenPrice;
 
+        address[] memory tokens = bucketInfo.getWhitelistedTokens();
+        
         // Only execute swaps when distribution has drifted outside tolerance
         if (!_isDistributionValid()) {
-            uint256 len = _bucketDistributions.length;
-
+            // uint256 len = _bucketDistributions.length;
+            // address[] memory tokens = bucketInfo.getWhitelistedTokens();
+            uint256 len = tokens.length;
             // Classify each distribution token as a seller (overweight) or buyer (underweight)
             address[] memory sellTokens = new address[](len);
             uint256[] memory sellAmounts = new uint256[](len); // in token-native units
             address[] memory buyTokens = new address[](len);
             uint256[] memory buyDeficits = new uint256[](len); // in USD (8 decimals)
-            uint256 sellCount = 0;
-            uint256 buyCount = 0;
-            uint256 totalDeficit = 0;
+            uint256[] memory countAndDeficit = new uint256[](3); // array of keeping sellCount, buyCount and totalDeficit
+            // uint256 sellCount = 0;
+            // uint256 buyCount = 0;
+            // uint256 totalDeficit = 0;
 
             for (uint256 i = 0; i < len; i++) {
-                address token = _bucketDistributions[i].token;
+                address token = tokens[i];
                 uint256 currentValueUSD = _getTokenValue(token);
-                uint256 targetValueUSD = (totalValueBefore * _bucketDistributions[i].weight) / WEIGHT_SUM;
-
+                // Find target distribution weight based on token address (0 for ETH) and calculate target USD value
+                uint256 targetWeight = 0;
+                for (uint256 j = 0; j < _bucketDistributions.length; j++) {
+                    if (_bucketDistributions[j].token == token) {
+                        targetWeight = _bucketDistributions[j].weight;
+                        break;
+                    }
+                }
+                uint256 targetValueUSD = (totalValueBefore * targetWeight) / WEIGHT_SUM;
+                
                 if (currentValueUSD > targetValueUSD) {
                     // Overweight: convert excess USD value into token units to sell
                     uint256 excessUSD = currentValueUSD - targetValueUSD;
@@ -472,25 +486,25 @@ contract PassiveBucket is
                     uint8 dec = _getTokenDecimals(token);
                     uint256 excessTokens = (excessUSD * (10 ** dec)) / price;
                     if (excessTokens > 0) {
-                        sellTokens[sellCount] = token;
-                        sellAmounts[sellCount] = excessTokens;
-                        sellCount++;
+                        sellTokens[countAndDeficit[0]] = token;
+                        sellAmounts[countAndDeficit[0]] = excessTokens;
+                        countAndDeficit[0]++;
                     }
                 } else if (targetValueUSD > currentValueUSD) {
                     // Underweight: record USD deficit for proportional buy allocation
                     uint256 deficitUSD = targetValueUSD - currentValueUSD;
-                    buyTokens[buyCount] = token;
-                    buyDeficits[buyCount] = deficitUSD;
-                    totalDeficit += deficitUSD;
-                    buyCount++;
+                    buyTokens[countAndDeficit[1]] = token;
+                    buyDeficits[countAndDeficit[1]] = deficitUSD;
+                    countAndDeficit[2] += deficitUSD;
+                    countAndDeficit[1]++;
                 }
             }
-
+            
             // For each overweight token, sell its excess proportionally to every underweight token
-            if (totalDeficit > 0) {
-                for (uint256 i = 0; i < sellCount; i++) {
-                    for (uint256 j = 0; j < buyCount; j++) {
-                        uint256 amountToSell = (sellAmounts[i] * buyDeficits[j]) / totalDeficit;
+            if (countAndDeficit[2] > 0) {
+                for (uint256 i = 0; i < countAndDeficit[0]; i++) {
+                    for (uint256 j = 0; j < countAndDeficit[1]; j++) {
+                        uint256 amountToSell = (sellAmounts[i] * buyDeficits[j]) / countAndDeficit[2];
                         if (amountToSell > 0) {
                             _executeBestSwap(sellTokens[i], buyTokens[j], amountToSell, 0);
                         }
@@ -513,10 +527,10 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
+            (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(msg.sender, totalValueBefore, beforeTokenPrice * tokenTotalSupply, totalValueAfter, tokenPrice);
+        emit Rebalanced(msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice);
     }
 
     /**
@@ -556,10 +570,10 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            beforeTokenPrice * tokenTotalSupply, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
+            (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(msg.sender, totalValueBefore, beforeTokenPrice * tokenTotalSupply, totalValueAfter, tokenPrice);
+        emit Rebalanced(msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -846,7 +860,7 @@ contract PassiveBucket is
             } catch {}
         }
 
-        require(bestQuote >= minAmountOut, "No sufficient quote found");
+        require(bestQuote > minAmountOut, "No sufficient quote found");
 
         // Execute on best DEX
         DexConfig memory config = dexConfigs[bestDex];
@@ -860,20 +874,20 @@ contract PassiveBucket is
                     fee: config.fee,
                     recipient: address(this),
                     amountIn: amountIn,
-                    amountOutMinimum: (minAmountOut * 95) / 100,
+                    amountOutMinimum: (bestQuote * 95) / 100,
                     sqrtPriceLimitX96: 0
                 })
             );
-
+        
         IERC20(actualTokenIn).forceApprove(config.router, 0);
 
         // Unwrap WETH → ETH if needed
-        if (tokenOut == address(0)) {
+        // if (tokenOut == address(0)) {
             uint256 wethBal = IWETH(weth).balanceOf(address(this));
             if (wethBal > 0) {
                 IWETH(weth).withdraw(wethBal);
             }
-        }
+        // }
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -945,7 +959,7 @@ contract PassiveBucket is
     ) internal returns (uint256) {
         bool accountable = isBucketAccountable();
         // Calculate new token price (pre-fee-minting)
-        uint256 newPrice = (totalValueAfter * PRECISION) / totalSupply();
+        uint256 newPrice = (totalSupply() > 0) ? (totalValueAfter * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
         uint256 valueDifference = totalValueAfter > totalValueBefore
             ? totalValueAfter - totalValueBefore
             : totalValueBefore - totalValueAfter;
@@ -954,9 +968,10 @@ contract PassiveBucket is
             uint256 increase = totalValueAfter - totalValueBefore;
             if (accountable) {
                 // Owner fee
-                uint256 ownerFeeValue = (increase * ownerFeeBps) / BPS_DENOMINATOR;
+                uint256 ownerFeeValue = (increase * ownerFeeBps * PRECISION) / BPS_DENOMINATOR;
                 if (ownerFeeValue > 0 && newPrice > 0) {
-                    uint256 ownerShares = (ownerFeeValue * PRECISION) / newPrice;
+                    uint256 ownerShares = (ownerFeeValue) / newPrice;
+                    ownerFeeValue = ownerFeeValue / PRECISION; // adjust back to USD value for event
                     if (ownerShares > 0) {
                         _mint(owner(), ownerShares);
                         emit RebalanceFeeDistributed(owner(), ownerShares, ownerFeeValue);
@@ -964,9 +979,10 @@ contract PassiveBucket is
                 }
             }
             // Caller fee
-            uint256 callerFeeValue = (increase * callerFeeBps) / BPS_DENOMINATOR;
+            uint256 callerFeeValue = (increase * callerFeeBps * PRECISION) / BPS_DENOMINATOR;
             if (callerFeeValue > 0 && newPrice > 0) {
-                uint256 callerShares = (callerFeeValue * PRECISION) / newPrice;
+                uint256 callerShares = (callerFeeValue) / newPrice;
+                callerFeeValue = callerFeeValue / PRECISION; // adjust back to USD value for event
                 if (callerShares > 0) {
                     _mint(msg.sender, callerShares);
                     emit RebalanceFeeDistributed(msg.sender, callerShares, callerFeeValue);
@@ -977,9 +993,9 @@ contract PassiveBucket is
 
             // Owner bears some of the decrease (burned from owner shares)
             if (accountable) {
-                uint256 penaltyValue = (decrease * (callerFeeBps + ownerFeeBps)) / BPS_DENOMINATOR;
-                uint256 currentPrice = tokenPrice > 0 ? tokenPrice : INITIAL_TOKEN_PRICE;
-                uint256 sharesToBurn = (penaltyValue * PRECISION) / currentPrice;
+                uint256 penaltyValue = (decrease * (callerFeeBps + ownerFeeBps) * PRECISION) / BPS_DENOMINATOR;
+                uint256 sharesToBurn = (penaltyValue) / newPrice;
+                penaltyValue = penaltyValue / PRECISION; // adjust back to USD value for event
                 uint256 ownerBalance = balanceOf(owner());
 
                 if (sharesToBurn > ownerBalance) {
@@ -1003,7 +1019,7 @@ contract PassiveBucket is
         }
 
         // Update token price to reflect new state
-        return (totalSupply() > 0) ? INITIAL_TOKEN_PRICE : (_calculateTotalValue() * PRECISION) / totalSupply();
+        return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
     }
 
     /*//////////////////////////////////////////////////////////////

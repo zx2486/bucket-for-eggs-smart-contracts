@@ -20,6 +20,7 @@ contract DeployPassiveBucketSepolia is Script {
     // Example distribution tokens on Sepolia (update with actual addresses)
     address constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
     address constant USDT = 0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0;
+    address constant LINK = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
 
     // Uniswap V3 on Sepolia
     address constant UNISWAP_V3_ROUTER = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
@@ -44,11 +45,11 @@ contract DeployPassiveBucketSepolia is Script {
         console.log("1inch Router:", ONEINCH_ROUTER_V6);
         console.log("");
 
-        // Prepare initial distributions: 50% ETH, 30% WETH, 20% USDT
+        // Prepare initial distributions: 50% ETH, 30% USDT, 20% LINK
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50); // 50% ETH
-        dists[1] = PassiveBucket.BucketDistribution(WETH, 30); // 30% WETH
-        dists[2] = PassiveBucket.BucketDistribution(USDT, 20); // 20% USDT
+        dists[1] = PassiveBucket.BucketDistribution(USDT, 30); // 30% USDT
+        dists[2] = PassiveBucket.BucketDistribution(LINK, 20); // 20% LINK
 
         vm.startBroadcast(deployerPrivateKey);
 
