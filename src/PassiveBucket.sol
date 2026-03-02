@@ -449,7 +449,7 @@ contract PassiveBucket is
         uint256 beforeTokenPrice = tokenPrice;
 
         address[] memory tokens = bucketInfo.getWhitelistedTokens();
-        
+
         // Only execute swaps when distribution has drifted outside tolerance
         if (!_isDistributionValid()) {
             // uint256 len = _bucketDistributions.length;
@@ -477,7 +477,7 @@ contract PassiveBucket is
                     }
                 }
                 uint256 targetValueUSD = (totalValueBefore * targetWeight) / WEIGHT_SUM;
-                
+
                 if (currentValueUSD > targetValueUSD) {
                     // Overweight: convert excess USD value into token units to sell
                     uint256 excessUSD = currentValueUSD - targetValueUSD;
@@ -499,14 +499,41 @@ contract PassiveBucket is
                     countAndDeficit[1]++;
                 }
             }
-            
+
             // For each overweight token, sell its excess proportionally to every underweight token
             if (countAndDeficit[2] > 0) {
+                /*
                 for (uint256 i = 0; i < countAndDeficit[0]; i++) {
                     for (uint256 j = 0; j < countAndDeficit[1]; j++) {
                         uint256 amountToSell = (sellAmounts[i] * buyDeficits[j]) / countAndDeficit[2];
                         if (amountToSell > 0) {
                             _executeBestSwap(sellTokens[i], buyTokens[j], amountToSell, 0);
+                        }
+                    }
+                }
+                */
+                // To reduce the number of swapping, we sell all the tokens to WETH and buy them back
+                for (uint256 i = 0; i < countAndDeficit[0]; i++) {
+                    if (sellAmounts[i] > 0) {
+                        if (sellTokens[i] == address(0)) {
+                            // if it is eth, just deposit into weth
+                            IWETH(weth).deposit{value: sellAmounts[i]}();
+                            continue;
+                        }
+                        _executeBestSwap(sellTokens[i], weth, sellAmounts[i], 0);
+                    }
+                }
+                uint256 wethBalance = IWETH(weth).balanceOf(address(this));
+                for (uint256 j = 0; j < countAndDeficit[1]; j++) {
+                    if (buyDeficits[j] > 0) {
+                        uint256 amountToBuy = (wethBalance * buyDeficits[j]) / countAndDeficit[2];
+                        if (amountToBuy > 0) {
+                            if (buyTokens[j] == address(0)) {
+                                // if it is eth, just withdraw from weth
+                                IWETH(weth).withdraw(amountToBuy);
+                                continue;
+                            }
+                            _executeBestSwap(weth, buyTokens[j], amountToBuy, 0);
                         }
                     }
                 }
@@ -527,10 +554,15 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
+            (beforeTokenPrice * tokenTotalSupply) / PRECISION,
+            totalValueAfter,
+            rebalanceOwnerFeeBps,
+            rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice);
+        emit Rebalanced(
+            msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice
+        );
     }
 
     /**
@@ -570,10 +602,15 @@ contract PassiveBucket is
         // Send performance fee to BucketInfo, owner and msg.sender based on value change, and burn owner penalty if value decreased
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
-            (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
+            (beforeTokenPrice * tokenTotalSupply) / PRECISION,
+            totalValueAfter,
+            rebalanceOwnerFeeBps,
+            rebalanceCallerFeeBps
         );
 
-        emit Rebalanced(msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice);
+        emit Rebalanced(
+            msg.sender, totalValueBefore, (beforeTokenPrice * tokenTotalSupply) / PRECISION, totalValueAfter, tokenPrice
+        );
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -834,7 +871,7 @@ contract PassiveBucket is
         }
 
         // Find best DEX
-        uint8 bestDex = 0;
+        uint8 bestDex = type(uint8).max;
         uint256 bestQuote = 0;
 
         for (uint8 i = 0; i < dexCount; i++) {
@@ -860,6 +897,8 @@ contract PassiveBucket is
             } catch {}
         }
 
+        require(bestDex != type(uint8).max, "No DEX available for pair");
+        require(bestQuote > 0, "Zero quote from all DEXs");
         require(bestQuote > minAmountOut, "No sufficient quote found");
 
         // Execute on best DEX
@@ -878,16 +917,16 @@ contract PassiveBucket is
                     sqrtPriceLimitX96: 0
                 })
             );
-        
+
         IERC20(actualTokenIn).forceApprove(config.router, 0);
 
         // Unwrap WETH → ETH if needed
-        // if (tokenOut == address(0)) {
+        if (tokenOut == address(0)) {
             uint256 wethBal = IWETH(weth).balanceOf(address(this));
             if (wethBal > 0) {
                 IWETH(weth).withdraw(wethBal);
             }
-        // }
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1019,7 +1058,13 @@ contract PassiveBucket is
         }
 
         // Update token price to reflect new state
-        return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
+        uint256 priceAfterRebalance =
+            (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
+        require(priceAfterRebalance > 0, "Invalid token price after rebalance");
+        uint256 priceChange =
+            priceAfterRebalance > newPrice ? priceAfterRebalance - newPrice : newPrice - priceAfterRebalance;
+        require(priceChange <= (newPrice * 20) / 100, "Price deviation too high after rebalance");
+        return priceAfterRebalance;
     }
 
     /*//////////////////////////////////////////////////////////////
