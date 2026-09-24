@@ -25,6 +25,13 @@ fs_permissions = [
     { access = "read-write", path = "./broadcast" }
 ]
 
+# Gas reporting
+# W0.6: this key was previously placed AFTER [profile.default.invariant] below,
+# so TOML parsed it as an invariant-profile key and gas reporting was silently
+# off. It belongs to [profile.default] and must stay above every [profile.*.x]
+# sub-table on this page.
+gas_reports = ["*"]
+
 # Testing configuration
 [profile.default.fuzz]
 runs = 256
@@ -33,22 +40,31 @@ max_test_rejects = 65536
 [profile.default.invariant]
 runs = 256
 depth = 15
-fail_on_revert = false
-
-# Gas reporting
-gas_reports = ["*"]
+# W0.5: flipped from false to true while there is still no invariant suite to
+# make vacuous (verified 2026-09-24: zero StdInvariant inheritance in src/ or
+# test/). This is free today; once handlers exist, flipping it turns a
+# passing run red. See root CLAUDE.md §5.4 and INV-12's precondition note.
+fail_on_revert = true
 
 # Etherscan verification
+# W0.2: Polygon + Polygon Amoy added — previously absent entirely, which would
+# have blocked any Polygon deploy/verify step. Reuses ETHERSCAN_API_KEY, same
+# convention as mainnet/sepolia/holesky below (Etherscan's unified v2 API key
+# works across chains including Polygon).
 [etherscan]
 mainnet = { key = "${ETHERSCAN_API_KEY}" }
 sepolia = { key = "${ETHERSCAN_API_KEY}" }
 holesky = { key = "${ETHERSCAN_API_KEY}" }
+polygon = { key = "${ETHERSCAN_API_KEY}" }
+polygon_amoy = { key = "${ETHERSCAN_API_KEY}" }
 
 # RPC endpoints
 [rpc_endpoints]
 mainnet = "${MAINNET_RPC_URL}"
 sepolia = "${SEPOLIA_RPC_URL}"
 holesky = "${HOLESKY_RPC_URL}"
+polygon = "${POLYGON_RPC_URL}"
+polygon_amoy = "${POLYGON_AMOY_RPC_URL}"
 localhost = "http://localhost:8545"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
