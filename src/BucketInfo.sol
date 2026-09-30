@@ -25,8 +25,16 @@ contract BucketInfo is Ownable, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     event TokenWhitelisted(address indexed token, bool whitelisted);
-    event PriceUpdated(address indexed token, uint256 price);
+    /// @dev Emitted the FIRST time a token's manual price is ever set. This is the
+    /// unbounded, no-deviation-check, no-interval-check path (A1) -- kept as a distinct
+    /// event (rather than reusing TokenPriceUpdated with a sentinel) specifically so the
+    /// unbounded case is observable off-chain without inspecting call data.
+    event TokenPriceInitialized(address indexed token, uint256 price);
+    /// @dev Emitted on every subsequent manual price update, i.e. once a token already has
+    /// a previous price on record. Subject to the A1 rate limit (see setTokenPrice).
+    event TokenPriceUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
     event PriceFeedUpdated(address indexed token, address priceFeed);
+    event MaxPriceStalenessUpdated(address indexed token, uint256 newMaxStaleness);
     event PlatformFeeUpdated(uint256 newFee);
     event FeesWithdrawn(address indexed tokenAddr, address indexed to, uint256 amount);
 
@@ -47,6 +55,12 @@ contract BucketInfo is Ownable, Pausable {
     /// @dev Mapping of token address to Chainlink price feed address
     mapping(address => address) private priceFeedsChainlink;
 
+    /// @dev Per-token override of the Chainlink staleness window (seconds). 0 means
+    /// "use DEFAULT_MAX_PRICE_STALENESS". Owner-configurable, same setter category as
+    /// setPriceFeed/batchSetPriceFeeds (W1 sc-oracle: "staleness window per feed rather
+    /// than one global 30 days").
+    mapping(address => uint256) public maxPriceStaleness;
+
     /// @dev List of all whitelisted tokens for enumeration
     address[] private whitelistedTokens;
 
@@ -58,6 +72,24 @@ contract BucketInfo is Ownable, Pausable {
 
     /// @dev Maximum platform fee (10% = 1000 basis points)
     uint256 public constant MAX_PLATFORM_FEE = 1000;
+
+    /// @dev Default Chainlink staleness window used when a token has no per-token override
+    /// (maxPriceStaleness[token] == 0). NO EXACT NUMBER WAS CLIENT-SPECIFIED for this --
+    /// see W1-SC1-ORACLE-REPORT.md `## Blocked`. 1 hour is a conservative default chosen to
+    /// match common Chainlink mainnet heartbeats for liquid pairs; it is owner-configurable
+    /// per token via setMaxPriceStaleness so a deployment can widen it for feeds with a
+    /// longer heartbeat without a code change.
+    uint256 public constant DEFAULT_MAX_PRICE_STALENESS = 1 hours;
+
+    /// @dev A1 (09-DECISION-LOG.md): maximum relative deviation allowed for a single
+    /// setTokenPrice/batchSetTokenPrices STEP, in basis points of the previous price
+    /// (2000 = 20%). Client-specified. This bounds each step, not the cumulative journey --
+    /// see W1-SC1-ORACLE-REPORT.md for the accepted-residual note on 24h compounding.
+    uint256 public constant MAX_PRICE_DEVIATION_BPS = 2000;
+
+    /// @dev A1: minimum interval between two manual price updates for the same token.
+    /// Client-specified.
+    uint256 public constant MIN_PRICE_UPDATE_INTERVAL = 1 hours;
 
     /// @dev Native token (ETH) address representation
     address public constant NATIVE_TOKEN = address(0);
@@ -160,21 +192,22 @@ contract BucketInfo is Ownable, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @dev Manually set token price (in USD with 8 decimals)
+     * @dev Manually set token price (in USD with 8 decimals). Subject to the A1 rate limit:
+     * the first-ever price set for a token is unbounded (emits TokenPriceInitialized);
+     * every subsequent update must be within MAX_PRICE_DEVIATION_BPS of the previous price
+     * and at least MIN_PRICE_UPDATE_INTERVAL after the previous update (emits
+     * TokenPriceUpdated), or the call reverts -- it never clamps.
      * @param token Address of the token
      * @param price Price in USD (e.g., 2000.00000000 for $2000)
      */
     function setTokenPrice(address token, uint256 price) external onlyOwner {
-        require(isWhitelisted[token], "Token not whitelisted");
-        require(price > 0, "Price must be greater than 0");
-
-        tokenPrices[token] = price;
-        priceUpdateTimestamps[token] = block.timestamp;
-        emit PriceUpdated(token, price);
+        _setTokenPrice(token, price);
     }
 
     /**
-     * @dev Batch set token prices
+     * @dev Batch set token prices. Each (token, price) pair is subject to the same A1 rate
+     * limit as setTokenPrice -- there is no bulk-update exemption, or the cap could be
+     * bypassed by routing every update through this function instead.
      * @param tokens Array of token addresses
      * @param prices Array of prices (must match tokens length)
      */
@@ -182,13 +215,44 @@ contract BucketInfo is Ownable, Pausable {
         require(tokens.length == prices.length, "Arrays length mismatch");
 
         for (uint256 i = 0; i < tokens.length; i++) {
-            require(isWhitelisted[tokens[i]], "Token not whitelisted");
-            require(prices[i] > 0, "Price must be greater than 0");
-
-            tokenPrices[tokens[i]] = prices[i];
-            priceUpdateTimestamps[tokens[i]] = block.timestamp;
-            emit PriceUpdated(tokens[i], prices[i]);
+            _setTokenPrice(tokens[i], prices[i]);
         }
+    }
+
+    /**
+     * @dev Shared implementation for setTokenPrice/batchSetTokenPrices enforcing A1.
+     * @param token Address of the token
+     * @param price New price in USD (8 decimals)
+     */
+    function _setTokenPrice(address token, uint256 price) internal {
+        require(isWhitelisted[token], "Token not whitelisted");
+        require(price > 0, "Price must be greater than 0");
+
+        uint256 lastUpdate = priceUpdateTimestamps[token];
+
+        if (lastUpdate == 0) {
+            // First-ever price for this token: unbounded by design (A1), but distinctly
+            // observable so an indexer can tell "initialized" apart from "updated".
+            tokenPrices[token] = price;
+            priceUpdateTimestamps[token] = block.timestamp;
+            emit TokenPriceInitialized(token, price);
+            return;
+        }
+
+        require(block.timestamp - lastUpdate >= MIN_PRICE_UPDATE_INTERVAL, "Price update too soon");
+
+        uint256 previousPrice = tokenPrices[token];
+        // Divide before multiplying: previousPrice can legitimately be as large as
+        // type(uint256).max (the first-ever set is unbounded), so previousPrice * 2000
+        // would overflow. previousPrice / 5 == 20% of previousPrice, rounded down --
+        // a strictly conservative (tighter) cap than true 20%, never looser.
+        uint256 maxDelta = previousPrice / (10000 / MAX_PRICE_DEVIATION_BPS);
+        uint256 diff = price > previousPrice ? price - previousPrice : previousPrice - price;
+        require(diff <= maxDelta, "Price deviation exceeds cap");
+
+        tokenPrices[token] = price;
+        priceUpdateTimestamps[token] = block.timestamp;
+        emit TokenPriceUpdated(token, previousPrice, price);
     }
 
     /**
@@ -217,31 +281,144 @@ contract BucketInfo is Ownable, Pausable {
     }
 
     /**
-     * @dev Get token price (USD with 8 decimals)
+     * @dev Set the Chainlink staleness window override for a token (seconds). Pass 0 to
+     * fall back to DEFAULT_MAX_PRICE_STALENESS. Same setter category as setPriceFeed --
+     * an extension of "price feed" configuration, not a new one.
+     * @param token Address of the token
+     * @param newMaxStaleness Maximum allowed age (seconds) of a Chainlink round's
+     * updatedAt before getTokenPrice/tryGetTokenPrice treat it as stale
+     */
+    function setMaxPriceStaleness(address token, uint256 newMaxStaleness) external onlyOwner {
+        require(isWhitelisted[token], "Token not whitelisted");
+        maxPriceStaleness[token] = newMaxStaleness;
+        emit MaxPriceStalenessUpdated(token, newMaxStaleness);
+    }
+
+    /**
+     * @dev Effective staleness window for a token: its override if set, else the default.
+     */
+    function _maxStalenessFor(address token) internal view returns (uint256) {
+        uint256 tokenOverride = maxPriceStaleness[token];
+        return tokenOverride == 0 ? DEFAULT_MAX_PRICE_STALENESS : tokenOverride;
+    }
+
+    /**
+     * @dev Get token price (USD with 8 decimals). Reverts if the token is not whitelisted
+     * or if no valid price is available (Chainlink data invalid/stale, or manual price
+     * missing/stale). For a never-reverting variant see tryGetTokenPrice.
      * @param token Address of the token
      * @return price Token price in USD
      */
     function getTokenPrice(address token) external view returns (uint256) {
         require(isWhitelisted[token], "Token not whitelisted");
+
         if (priceFeedsChainlink[token] != address(0)) {
-            AggregatorV3Interface priceFeed = AggregatorV3Interface(priceFeedsChainlink[token]);
-            (, int256 price,,,) = priceFeed.latestRoundData();
-            uint8 decimals = priceFeed.decimals();
-            // Adjust price to have 8 decimals
-            if (decimals < PRICE_DECIMALS) {
-                return uint256(price) * (10 ** (PRICE_DECIMALS - decimals));
-            } else if (decimals > PRICE_DECIMALS) {
-                return uint256(price) / (10 ** (decimals - PRICE_DECIMALS));
-            } else {
-                return uint256(price);
-            }
+            (bool ok, uint256 price) = _tryReadChainlinkPrice(token);
+            require(ok, "Invalid Chainlink price data");
+            return price;
         }
+
         // Check if manual price is stale (older than 30 days)
         require(
             priceUpdateTimestamps[token] > 0 && block.timestamp - priceUpdateTimestamps[token] <= 30 days,
             "Price is outdated"
         );
         return tokenPrices[token];
+    }
+
+    /**
+     * @dev Never-reverting companion to getTokenPrice. Returns (false, 0) for any input
+     * that would cause getTokenPrice to revert -- non-whitelisted token, a reverting or
+     * malformed Chainlink feed, negative/zero/stale/incomplete round data, or a missing/
+     * stale manual price. Consumers (vaults) use this to check price availability without
+     * risking a revert mid-transaction.
+     * @param token Address of the token
+     * @return ok True if a valid price was found
+     * @return price The price in USD (8 decimals) if ok is true, else 0
+     */
+    function tryGetTokenPrice(address token) external view returns (bool ok, uint256 price) {
+        return _tryGetPrice(token);
+    }
+
+    /**
+     * @dev Per-token oracle-health check: true if this token's price is NOT currently
+     * available via tryGetTokenPrice (i.e. it is potentially outpriced / stale / invalid).
+     * BucketInfo has no notion of which tokens any given vault holds, so this is
+     * necessarily per-token, not per-vault -- a vault consuming this must OR the result
+     * across its held-token set. See W1-SC1-ORACLE-REPORT.md `## Corrections to my briefing`.
+     * @param token Address of the token
+     * @return True if the token's price is currently unavailable/invalid
+     */
+    function isPotentiallyOutpriced(address token) external view returns (bool) {
+        (bool ok,) = _tryGetPrice(token);
+        return !ok;
+    }
+
+    /**
+     * @dev Shared never-reverting price lookup used by tryGetTokenPrice and
+     * isPotentiallyOutpriced.
+     */
+    function _tryGetPrice(address token) internal view returns (bool ok, uint256 price) {
+        if (!isWhitelisted[token]) {
+            return (false, 0);
+        }
+
+        if (priceFeedsChainlink[token] != address(0)) {
+            return _tryReadChainlinkPrice(token);
+        }
+
+        if (priceUpdateTimestamps[token] > 0 && block.timestamp - priceUpdateTimestamps[token] <= 30 days) {
+            return (true, tokenPrices[token]);
+        }
+
+        return (false, 0);
+    }
+
+    /**
+     * @dev Reads and validates a Chainlink round for `token`. Never reverts -- every
+     * failure mode (reverting call, negative/zero answer, updatedAt == 0, a carried-forward
+     * round where answeredInRound < roundId, or a round older than the effective staleness
+     * window) returns (false, 0) instead. The int256 -> uint256 cast is guarded by the
+     * `answer <= 0` check immediately above it, so it can never reinterpret a negative
+     * two's-complement value as a huge positive price.
+     */
+    function _tryReadChainlinkPrice(address token) internal view returns (bool ok, uint256 price) {
+        address feedAddr = priceFeedsChainlink[token];
+        if (feedAddr == address(0)) {
+            return (false, 0);
+        }
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(feedAddr);
+
+        try priceFeed.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256, /* startedAt, unused */ uint256 updatedAt, uint80 answeredInRound
+        ) {
+            if (answer <= 0) return (false, 0);
+            if (updatedAt == 0) return (false, 0);
+            if (updatedAt > block.timestamp) return (false, 0);
+            if (answeredInRound < roundId) return (false, 0);
+            if (block.timestamp - updatedAt > _maxStalenessFor(token)) return (false, 0);
+
+            uint8 decimals;
+            try priceFeed.decimals() returns (uint8 d) {
+                decimals = d;
+            } catch {
+                return (false, 0);
+            }
+
+            // Guarded, explicit cast: answer > 0 was just verified above, so this can
+            // never reinterpret a negative two's-complement bit pattern.
+            uint256 rawPrice = uint256(answer);
+
+            if (decimals < PRICE_DECIMALS) {
+                return (true, rawPrice * (10 ** (PRICE_DECIMALS - decimals)));
+            } else if (decimals > PRICE_DECIMALS) {
+                return (true, rawPrice / (10 ** (decimals - PRICE_DECIMALS)));
+            } else {
+                return (true, rawPrice);
+            }
+        } catch {
+            return (false, 0);
+        }
     }
 
     /**

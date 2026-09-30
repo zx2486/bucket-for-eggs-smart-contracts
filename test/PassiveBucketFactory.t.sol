@@ -163,7 +163,7 @@ contract PassiveBucketFactoryTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         implementation = new PassiveBucket();
-        factory = new PassiveBucketFactory(address(implementation));
+        factory = new PassiveBucketFactory(address(implementation), address(bucketInfo));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -174,9 +174,21 @@ contract PassiveBucketFactoryTest is Test {
         assertEq(factory.implementation(), address(implementation));
     }
 
+    // W1.7: bucketInfo is now a constructor parameter, stored immutable.
+    function test_Constructor_StoresBucketInfo() public view {
+        assertEq(factory.bucketInfo(), address(bucketInfo));
+    }
+
     function test_Constructor_ZeroAddressReverts() public {
         vm.expectRevert(PassiveBucketFactory.InvalidImplementation.selector);
-        new PassiveBucketFactory(address(0));
+        new PassiveBucketFactory(address(0), address(bucketInfo));
+    }
+
+    // W1.7: the constructor's new second parameter gets its own zero-check, independent of the
+    // implementation zero-check above.
+    function test_Constructor_ZeroBucketInfoReverts() public {
+        vm.expectRevert(PassiveBucketFactory.InvalidBucketInfo.selector);
+        new PassiveBucketFactory(address(implementation), address(0));
     }
 
     function test_Constructor_InitialProxyCountIsZero() public view {
@@ -194,39 +206,41 @@ contract PassiveBucketFactoryTest is Test {
 
     function test_Create_DeploysProxy() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertTrue(proxy != address(0));
     }
 
     function test_Create_OwnerIsCallerNotFactory() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
         vm.prank(alice);
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertEq(PassiveBucket(payable(proxy)).owner(), alice);
     }
 
     function test_Create_OwnerIsNotFactory() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
         vm.prank(alice);
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertTrue(PassiveBucket(payable(proxy)).owner() != address(factory));
     }
 
     function test_Create_BucketInfoIsSet() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertEq(address(PassiveBucket(payable(proxy)).bucketInfo()), address(bucketInfo));
+        // W1.7: the vault's bucketInfo must equal the FACTORY's own immutable value.
+        assertEq(address(PassiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
     }
 
     function test_Create_OneInchRouterIsSet() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertEq(PassiveBucket(payable(proxy)).oneInchRouter(), mockOneInch);
     }
 
     function test_Create_ERC20NameAndSymbol() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         PassiveBucket pb = PassiveBucket(payable(proxy));
         assertEq(pb.name(), NAME);
         assertEq(pb.symbol(), SYMBOL);
@@ -234,7 +248,7 @@ contract PassiveBucketFactoryTest is Test {
 
     function test_Create_DistributionsAreStored() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         PassiveBucket pb = PassiveBucket(payable(proxy));
 
         PassiveBucket.BucketDistribution[] memory stored = pb.getBucketDistributions();
@@ -247,16 +261,15 @@ contract PassiveBucketFactoryTest is Test {
         assertEq(stored[2].weight, 20);
     }
 
-    function test_Create_ZeroBucketInfoReverts() public {
-        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        vm.expectRevert(PassiveBucketFactory.InvalidBucketInfo.selector);
-        factory.createPassiveBucket(address(0), dists, mockOneInch, NAME, SYMBOL);
-    }
+    // W1.7: createPassiveBucket no longer accepts a caller-supplied BucketInfo address, so there
+    // is nothing left for this call site to revert on. The zero-check now lives on the
+    // constructor's `bucketInfo_` parameter -- see test_Constructor_ZeroBucketInfoReverts above.
+    function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public {}
 
     function test_Create_ZeroOneInchReverts() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
         vm.expectRevert(PassiveBucketFactory.InvalidOneInchRouter.selector);
-        factory.createPassiveBucket(address(bucketInfo), dists, address(0), NAME, SYMBOL);
+        factory.createPassiveBucket(dists, address(0), NAME, SYMBOL);
     }
 
     function test_Create_EmitsEvent() public {
@@ -264,7 +277,7 @@ contract PassiveBucketFactoryTest is Test {
 
         vm.recordLogs();
         vm.prank(alice);
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         // Verify via returned proxy
         assertEq(PassiveBucket(payable(proxy)).owner(), alice);
@@ -277,24 +290,27 @@ contract PassiveBucketFactoryTest is Test {
         vm.prank(alice);
         vm.expectEmit(false, true, true, false); // skip proxy (unknown), check owner + bucketInfo
         emit PassiveBucketCreated(address(0), alice, address(bucketInfo), NAME, SYMBOL);
-        factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
     }
 
     function test_Create_ProxyIsIndependentOfImplementation() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
-        // Calling initialize on the implementation directly should revert (already disabled)
+        // Calling initialize on the implementation directly should revert (already disabled).
+        // NOTE: PassiveBucket.initialize() itself is unchanged by W1.7 -- it still takes
+        // bucketInfo as its first parameter. Only the FACTORY's createPassiveBucket() dropped the
+        // parameter (the factory now supplies its own immutable bucketInfo internally).
         vm.expectRevert();
         implementation.initialize(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
 
         // But factory deploy still works
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertTrue(proxy != address(0));
     }
 
     function test_Create_CustomNameAndSymbol() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, "My Bucket", "MBK");
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, "My Bucket", "MBK");
         PassiveBucket pb = PassiveBucket(payable(proxy));
         assertEq(pb.name(), "My Bucket");
         assertEq(pb.symbol(), "MBK");
@@ -306,7 +322,7 @@ contract PassiveBucketFactoryTest is Test {
 
     function test_Tracking_SingleDeployment() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertEq(factory.getDeployedProxiesCount(), 1);
         assertEq(factory.deployedProxies(0), proxy);
     }
@@ -315,10 +331,10 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(alice);
-        address proxy1 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, "Bucket A", "BA");
+        address proxy1 = factory.createPassiveBucket(dists, mockOneInch, "Bucket A", "BA");
 
         vm.prank(bob);
-        address proxy2 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, "Bucket B", "BB");
+        address proxy2 = factory.createPassiveBucket(dists, mockOneInch, "Bucket B", "BB");
 
         assertEq(factory.getDeployedProxiesCount(), 2);
         assertEq(factory.deployedProxies(0), proxy1);
@@ -328,17 +344,17 @@ contract PassiveBucketFactoryTest is Test {
     function test_Tracking_ProxiesAreUnique() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
-        address proxy1 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+        address proxy2 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertTrue(proxy1 != proxy2);
     }
 
     function test_Tracking_GetAllDeployedProxies() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
-        address proxy1 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
-        address proxy3 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+        address proxy2 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+        address proxy3 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         address[] memory proxies = factory.getAllDeployedProxies();
         assertEq(proxies.length, 3);
@@ -355,10 +371,10 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, "Alice Bucket", "ALI");
+        address proxyAlice = factory.createPassiveBucket(dists, mockOneInch, "Alice Bucket", "ALI");
 
         vm.prank(bob);
-        address proxyBob = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, "Bob Bucket", "BOB");
+        address proxyBob = factory.createPassiveBucket(dists, mockOneInch, "Bob Bucket", "BOB");
 
         assertEq(PassiveBucket(payable(proxyAlice)).owner(), alice);
         assertEq(PassiveBucket(payable(proxyBob)).owner(), bob);
@@ -368,10 +384,10 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         PassiveBucket pbAlice = PassiveBucket(payable(proxyAlice));
         PassiveBucket pbBob = PassiveBucket(payable(proxyBob));
@@ -389,16 +405,21 @@ contract PassiveBucketFactoryTest is Test {
         assertFalse(pbBob.paused());
     }
 
+    // W1.7: two different BucketInfo pointers can no longer coexist on ONE factory -- bucketInfo
+    // is factory-immutable. Isolation across BucketInfo pointers is now demonstrated by deploying
+    // two separate factories, each with its own immutable bucketInfo.
     function test_Isolation_DifferentBucketInfos() public {
         MockBucketInfoForPBFactory bucketInfo2 = new MockBucketInfoForPBFactory();
         bucketInfo2.addToken(address(0), ETH_PRICE);
         bucketInfo2.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo2.addToken(address(tokenB), TOKEN_B_PRICE);
 
+        PassiveBucketFactory factory2 = new PassiveBucketFactory(address(implementation), address(bucketInfo2));
+
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
-        address proxy1 = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory.createPassiveBucket(address(bucketInfo2), dists, mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+        address proxy2 = factory2.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         assertEq(address(PassiveBucket(payable(proxy1)).bucketInfo()), address(bucketInfo));
         assertEq(address(PassiveBucket(payable(proxy2)).bucketInfo()), address(bucketInfo2));
@@ -408,10 +429,10 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         // Alice tries to pause Bob's contract — should revert
         vm.prank(alice);
@@ -431,10 +452,10 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(alice);
-        address proxyAlice = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
 
         PassiveBucket pbAlice = PassiveBucket(payable(proxyAlice));
         PassiveBucket pbBob = PassiveBucket(payable(proxyBob));
@@ -461,7 +482,7 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         vm.prank(caller);
-        address proxy = factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         assertEq(PassiveBucket(payable(proxy)).owner(), caller);
     }
 
@@ -471,10 +492,70 @@ contract PassiveBucketFactoryTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 
         for (uint256 i = 0; i < count; i++) {
-            factory.createPassiveBucket(address(bucketInfo), dists, mockOneInch, NAME, SYMBOL);
+            factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
         }
 
         assertEq(factory.getDeployedProxiesCount(), count);
         assertEq(factory.getAllDeployedProxies().length, count);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+            W1.7 -- FACTORY-IMMUTABLE BUCKETINFO POINTER TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    // (1) The old caller-supplied-bucketInfo call shape no longer resolves to any selector on
+    // this factory. createPassiveBucket used to be
+    // (address,PassiveBucket.BucketDistribution[],address,string,string) -- 5 args, bucketInfo
+    // first. It is now (PassiveBucket.BucketDistribution[],address,string,string) -- 4 args.
+    // A raw low-level call built against the OLD selector must fail to resolve.
+    function test_W17_OldFiveArgCallShapeNoLongerResolvesToAnySelector() public {
+        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
+        bytes memory oldShapeCalldata = abi.encodeWithSignature(
+            "createPassiveBucket(address,(address,uint256)[],address,string,string)",
+            address(bucketInfo),
+            dists,
+            mockOneInch,
+            NAME,
+            SYMBOL
+        );
+        (bool success,) = address(factory).call(oldShapeCalldata);
+        assertFalse(success, "old 5-arg createPassiveBucket selector must not resolve post-W1.7");
+    }
+
+    // (2) The resulting vault's bucketInfo() getter equals the FACTORY's own immutable value,
+    // never anything a caller could supply (there is no longer a parameter to supply it through).
+    function test_W17_VaultBucketInfoGetterEqualsFactoryImmutable() public {
+        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
+        vm.prank(alice);
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+        assertEq(address(PassiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
+    }
+
+    // (3) The PassiveBucketCreated event's bucketInfo field matches the factory's immutable value.
+    function test_W17_CreatedEventBucketInfoFieldMatchesFactoryImmutable() public {
+        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
+        vm.expectEmit(false, true, true, true);
+        emit PassiveBucketCreated(address(0), address(this), factory.bucketInfo(), NAME, SYMBOL);
+        factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+    }
+
+    // (4) Pre-fix-vulnerability proof: before W1.7, createPassiveBucket accepted a caller-supplied
+    // BucketInfo address as its first parameter with only a zero-check (no genuineness check).
+    // A malicious caller could point their new vault at an attacker-controlled BucketInfo-shaped
+    // contract, defeating the 00:44 oracle protection for that vault's investors. Post-fix, the
+    // call signature has no such parameter at all -- the attacker-controlled contract below is
+    // constructed and whitelists a token, but there is no way to pass it into createPassiveBucket;
+    // every vault this factory creates is pinned to the factory's own immutable, platform-supplied
+    // bucketInfo.
+    function test_W17_PreFixVulnerability_AttackerControlledBucketInfoCannotBeInjectedAtCreateTime() public {
+        MockBucketInfoForPBFactory attackerBucketInfo = new MockBucketInfoForPBFactory();
+        attackerBucketInfo.addToken(address(0), 1);
+
+        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
+        vm.prank(makeAddr("attacker"));
+        address proxy = factory.createPassiveBucket(dists, mockOneInch, NAME, SYMBOL);
+
+        assertEq(address(PassiveBucket(payable(proxy)).bucketInfo()), address(bucketInfo));
+        assertTrue(address(PassiveBucket(payable(proxy)).bucketInfo()) != address(attackerBucketInfo));
     }
 }

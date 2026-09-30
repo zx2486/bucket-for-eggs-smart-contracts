@@ -87,6 +87,12 @@ contract PureMembership is
     /// @notice Active membership count per level
     mapping(uint256 => uint256) public activeMembershipCount;
 
+    /// @notice Owner-set ceiling on `paymentAmount` accepted per `buyMembership` call.
+    /// 0 (the storage default) means "no owner-side cap". Denominated in the raw
+    /// units of whichever `payTokenAddress` is used for a given call. See
+    /// `setMaxPaymentAmount` for why this cannot be set from `initialize()`.
+    uint256 public maxPaymentAmount;
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -111,6 +117,7 @@ contract PureMembership is
     event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
     event TokensRecovered(address indexed token, address indexed to, uint256 amount);
     event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
+    event MaxPaymentAmountUpdated(uint256 oldMax, uint256 newMax);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -128,6 +135,7 @@ contract PureMembership is
     error ETHTransferFailed();
     error CannotRecoverWhitelistedToken(address token);
     error UnauthorizedBucketInfoUpdate();
+    error PaymentExceedsMaxAmount(uint256 paymentAmount, uint256 maxAllowed);
 
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
@@ -189,8 +197,14 @@ contract PureMembership is
      *      Otherwise, mints a new ERC-1155 token and sets the initial expiry.
      * @param tokenId The membership token ID to purchase
      * @param payTokenAddress The payment token (address(0) for ETH)
+     * @param maxPay Optional caller-supplied ceiling on `paymentAmount`, in the same
+     *   decimals-adjusted units as `payTokenAddress`. Pass 0 for "no user-side cap".
+     *   Composed with the owner-set `maxPaymentAmount` as `min(ownerCap, userCap)`,
+     *   where a 0 on either side means that side imposes no restriction. This lets a
+     *   caller bound what they are willing to pay if the oracle price moves against
+     *   them between quoting and mining, independent of whatever the owner has set.
      */
-    function buyMembership(uint256 tokenId, address payTokenAddress)
+    function buyMembership(uint256 tokenId, address payTokenAddress, uint256 maxPay)
         external
         payable
         nonReentrant
@@ -211,6 +225,17 @@ contract PureMembership is
         // paymentAmount = membershipPriceUSD / tokenPriceUSD * 10^decimals
         // config.price and oraclePrice both in 8 decimal USD
         uint256 paymentAmount = (config.price * (10 ** decimals)) / oraclePrice;
+
+        // Enforce owner cap (maxPaymentAmount) and optional per-call user cap (maxPay),
+        // composed as min(ownerCap, userCap). 0 on either side means "no restriction
+        // from that side". This must run before any funds move.
+        uint256 effectiveCap = maxPaymentAmount;
+        if (maxPay != 0 && (effectiveCap == 0 || maxPay < effectiveCap)) {
+            effectiveCap = maxPay;
+        }
+        if (effectiveCap != 0 && paymentAmount > effectiveCap) {
+            revert PaymentExceedsMaxAmount(paymentAmount, effectiveCap);
+        }
 
         // Handle payment
         if (payTokenAddress == address(0)) {
@@ -442,6 +467,32 @@ contract PureMembership is
     /// @notice Unpause the contract
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    PAYMENT CAP MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Set the owner-side cap on the payment amount accepted in a single
+     *         `buyMembership` call.
+     * @dev `newMax == 0` means "no owner-side cap" (unlimited); this is also the
+     *      storage default, so newly-deployed proxies are unrestricted until the
+     *      owner opts in by calling this function. The value is denominated in the
+     *      raw (decimals-adjusted) units of whichever `payTokenAddress` is used for
+     *      a given call -- the same units as the `paymentAmount` it is compared
+     *      against in `buyMembership`. Because different ERC-20s have different
+     *      `decimals()`, a single global cap does not carry equal USD weight across
+     *      tokens; this mirrors the shape the plan and review asked for
+     *      (`_deliverables/04-CONTRACTS-IMPLEMENTATION-PLAN.md` conflict (h),
+     *      `_review/03b-membership.md` H-02) and the cross-token caveat is flagged
+     *      in full in the accompanying report, not silently assumed away.
+     * @param newMax The new owner-side maximum payment amount (0 = unlimited)
+     */
+    function setMaxPaymentAmount(uint256 newMax) external onlyOwner {
+        uint256 oldMax = maxPaymentAmount;
+        maxPaymentAmount = newMax;
+        emit MaxPaymentAmountUpdated(oldMax, newMax);
     }
 
     /*//////////////////////////////////////////////////////////////

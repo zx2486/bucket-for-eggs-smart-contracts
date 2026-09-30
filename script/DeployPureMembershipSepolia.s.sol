@@ -77,15 +77,18 @@ contract DeployPureMembershipSepolia is Script {
         console.log("Implementation deployed at:", address(implementation));
 
         // Step 2: Deploy the factory
+        // W1.7: bucketInfoAddr is now a constructor-time, factory-immutable parameter, not a
+        // per-call argument to createPureMembership -- see src/PureMembershipFactory.sol
+        // `bucketInfo`.
         console.log("Step 2: Deploying PureMembershipFactory...");
-        PureMembershipFactory factory = new PureMembershipFactory(address(implementation));
+        PureMembershipFactory factory = new PureMembershipFactory(address(implementation), bucketInfoAddr);
         console.log("Factory deployed at:", address(factory));
 
         // Step 3: Create a PureMembership proxy via the factory
         // The factory deploys an ERC-1967 proxy, initialises it, then transfers
         // ownership to msg.sender (the deployer).
         console.log("Step 3: Creating PureMembership proxy via factory...");
-        address payable proxyAddr = factory.createPureMembership(configs, bucketInfoAddr, METADATA_URI);
+        address payable proxyAddr = factory.createPureMembership(configs, METADATA_URI);
         PureMembership pureMembership = PureMembership(proxyAddr);
         console.log("Proxy deployed at:", proxyAddr);
 

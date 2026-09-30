@@ -42,13 +42,15 @@ contract DeployActiveBucketSepolia is Script {
         console.log("Implementation deployed at:", address(implementation));
 
         // Step 2: Deploy the factory
+        // W1.7: bucketInfoAddr is now a constructor-time, factory-immutable parameter, not a
+        // per-call argument to createActiveBucket -- see src/ActiveBucketFactory.sol `bucketInfo`.
         console.log("Step 2: Deploying ActiveBucketFactory...");
-        ActiveBucketFactory factory = new ActiveBucketFactory(address(implementation));
+        ActiveBucketFactory factory = new ActiveBucketFactory(address(implementation), bucketInfoAddr);
         console.log("Factory deployed at:", address(factory));
 
         // Step 3: Create an ActiveBucket proxy via the factory
         console.log("Step 3: Creating ActiveBucket proxy via factory...");
-        address proxyAddr = factory.createActiveBucket(bucketInfoAddr, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
+        address proxyAddr = factory.createActiveBucket(ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
         ActiveBucket activeBucket = ActiveBucket(payable(proxyAddr));
         console.log("Proxy deployed at:", proxyAddr);
 

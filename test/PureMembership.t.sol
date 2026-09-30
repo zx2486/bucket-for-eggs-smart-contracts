@@ -166,6 +166,7 @@ contract PureMembershipTest is Test {
     event MembershipCancelled(address indexed user, uint256 indexed tokenId, uint256 level);
     event RevenueWithdrawn(address indexed to, address indexed token, uint256 amount, uint256 fee);
     event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
+    event MaxPaymentAmountUpdated(uint256 oldMax, uint256 newMax);
 
     function setUp() public {
         owner = address(this);
@@ -245,7 +246,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         assertEq(membership.balanceOf(user1, BASIC_ID), 1);
@@ -261,7 +262,7 @@ contract PureMembershipTest is Test {
         uint256 expectedPayment = 5e15;
 
         vm.prank(user1);
-        membership.buyMembership{value: expectedPayment}(BASIC_ID, address(0));
+        membership.buyMembership{value: expectedPayment}(BASIC_ID, address(0), 0);
 
         assertEq(membership.balanceOf(user1, BASIC_ID), 1);
         assertTrue(membership.membershipExpiry(user1, BASIC_ID) > block.timestamp);
@@ -274,7 +275,7 @@ contract PureMembershipTest is Test {
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
-        membership.buyMembership{value: overpay}(BASIC_ID, address(0));
+        membership.buyMembership{value: overpay}(BASIC_ID, address(0), 0);
 
         // Should refund overpay - expectedPayment
         uint256 ethSpent = ethBefore - user1.balance;
@@ -286,20 +287,20 @@ contract PureMembershipTest is Test {
 
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(PureMembership.InsufficientPayment.selector, expectedPayment, 1));
-        membership.buyMembership{value: 1}(BASIC_ID, address(0));
+        membership.buyMembership{value: 1}(BASIC_ID, address(0), 0);
     }
 
     function test_RevertBuyMembershipInvalidTokenId() public {
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(PureMembership.InvalidTokenId.selector, 999));
-        membership.buyMembership{value: 1 ether}(999, address(0));
+        membership.buyMembership{value: 1 ether}(999, address(0), 0);
     }
 
     function test_RevertBuyMembershipInvalidPayToken() public {
         address fakeToken = makeAddr("fakeToken");
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(PureMembership.InvalidToken.selector, fakeToken));
-        membership.buyMembership(BASIC_ID, fakeToken);
+        membership.buyMembership(BASIC_ID, fakeToken, 0);
     }
 
     function test_RevertBuyMembershipPaused() public {
@@ -307,7 +308,7 @@ contract PureMembershipTest is Test {
 
         vm.prank(user1);
         vm.expectRevert();
-        membership.buyMembership{value: 1 ether}(BASIC_ID, address(0));
+        membership.buyMembership{value: 1 ether}(BASIC_ID, address(0), 0);
     }
 
     function test_RevertBuyMembershipPlatformDown() public {
@@ -315,7 +316,7 @@ contract PureMembershipTest is Test {
 
         vm.prank(user1);
         vm.expectRevert(PureMembership.PlatformNotOperational.selector);
-        membership.buyMembership{value: 1 ether}(BASIC_ID, address(0));
+        membership.buyMembership{value: 1 ether}(BASIC_ID, address(0), 0);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -328,7 +329,7 @@ contract PureMembershipTest is Test {
         // First purchase
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment * 2);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
 
         uint256 firstExpiry = membership.membershipExpiry(user1, BASIC_ID);
 
@@ -336,7 +337,7 @@ contract PureMembershipTest is Test {
         vm.warp(block.timestamp + 15 days);
 
         // Renew
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         uint256 newExpiry = membership.membershipExpiry(user1, BASIC_ID);
@@ -352,13 +353,13 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment * 2);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
 
         // Advance past expiry
         vm.warp(block.timestamp + BASIC_DURATION + 1);
 
         // Buy again (not renew since expired) - user already has token
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         // Expiry should be from current time
@@ -374,7 +375,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         assertTrue(membership.checkMembershipStatus(user1, BASIC_LEVEL));
@@ -387,7 +388,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(PREMIUM_ID, address(payToken));
+        membership.buyMembership(PREMIUM_ID, address(payToken), 0);
         vm.stopPrank();
 
         assertTrue(membership.checkMembershipStatus(user1, PREMIUM_LEVEL));
@@ -400,7 +401,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         // Advance past expiry
@@ -422,7 +423,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
 
         membership.cancelMembership(BASIC_ID);
         vm.stopPrank();
@@ -443,7 +444,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         vm.warp(block.timestamp + BASIC_DURATION + 1);
@@ -461,8 +462,8 @@ contract PureMembershipTest is Test {
         // Buy basic and premium
         vm.startPrank(user1);
         payToken.approve(address(membership), 60e6);
-        membership.buyMembership(BASIC_ID, address(payToken));
-        membership.buyMembership(PREMIUM_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        membership.buyMembership(PREMIUM_ID, address(payToken), 0);
         vm.stopPrank();
 
         PureMembership.UserMembership[] memory memberships = membership.getUserMemberships(user1);
@@ -485,7 +486,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken));
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         (address[] memory tokens, uint256[] memory amounts) = membership.getMembershipRevenue();
@@ -500,7 +501,7 @@ contract PureMembershipTest is Test {
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(VIP_ID, address(payToken));
+        membership.buyMembership(VIP_ID, address(payToken), 0);
         vm.stopPrank();
 
         uint256 withdrawAmount = expectedPayment;
@@ -645,7 +646,7 @@ contract PureMembershipTest is Test {
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
-        membership.buyMembership{value: expectedPayment + extraEth}(BASIC_ID, address(0));
+        membership.buyMembership{value: expectedPayment + extraEth}(BASIC_ID, address(0), 0);
 
         // Excess should be refunded
         uint256 ethSpent = ethBefore - user1.balance;
@@ -663,7 +664,7 @@ contract PureMembershipTest is Test {
 
             vm.startPrank(user);
             payToken.approve(address(membership), expectedPayment);
-            membership.buyMembership(BASIC_ID, address(payToken));
+            membership.buyMembership(BASIC_ID, address(payToken), 0);
             vm.stopPrank();
 
             assertTrue(membership.checkMembershipStatus(user, BASIC_LEVEL));
@@ -671,5 +672,171 @@ contract PureMembershipTest is Test {
 
         assertEq(membership.activeMembershipCount(BASIC_LEVEL), numUsers);
         assertEq(membership.revenueByToken(address(payToken)), expectedPayment * numUsers);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                RENEWAL BOUNDARY TEST (max(expiry, now))
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice At the exact instant membershipExpiry == block.timestamp, buyMembership
+    /// must take the "new purchase" branch (expiry = now + duration), not the "renew"
+    /// branch -- i.e. max(existingExpiry, block.timestamp) resolves to block.timestamp,
+    /// not to a stale existingExpiry that equals it. This is the boundary the existing
+    /// test_RenewMembership (renew-while-active) and test_BuyAfterExpired (renew-after-
+    /// expiry) tests do not exercise: both warp strictly past expiry, never exactly to it.
+    function test_BuyMembershipExactlyAtExpiryBoundary() public {
+        uint256 expectedPayment = 10e6;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment * 2);
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        uint256 firstExpiry = membership.membershipExpiry(user1, BASIC_ID);
+
+        // Warp to exactly the first expiry timestamp (neither before nor after it).
+        vm.warp(firstExpiry);
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        vm.stopPrank();
+
+        uint256 secondExpiry = membership.membershipExpiry(user1, BASIC_ID);
+        // max(firstExpiry, block.timestamp) == max(firstExpiry, firstExpiry) == firstExpiry,
+        // so the new expiry is block.timestamp + duration == firstExpiry + duration -- the
+        // same arithmetic result as compounding, confirming the boundary is not a lost-time
+        // or back-dating defect either way.
+        assertEq(secondExpiry, block.timestamp + BASIC_DURATION);
+        assertEq(secondExpiry, firstExpiry + BASIC_DURATION);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    MAX PAYMENT AMOUNT TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_MaxPaymentAmountDefaultsToUnlimited() public view {
+        // Storage default is 0, which this contract treats as "no owner-side cap".
+        assertEq(membership.maxPaymentAmount(), 0);
+    }
+
+    function test_SetMaxPaymentAmount() public {
+        vm.expectEmit(false, false, false, true, address(membership));
+        emit MaxPaymentAmountUpdated(0, 10e6);
+        membership.setMaxPaymentAmount(10e6);
+        assertEq(membership.maxPaymentAmount(), 10e6);
+    }
+
+    function test_RevertSetMaxPaymentAmountNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        membership.setMaxPaymentAmount(10e6);
+    }
+
+    function test_BuyMembershipWithinOwnerCap() public {
+        uint256 expectedPayment = 10e6;
+        membership.setMaxPaymentAmount(expectedPayment); // exactly equal to payment: allowed
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        vm.stopPrank();
+
+        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
+    }
+
+    function test_RevertBuyMembershipExceedsOwnerCap() public {
+        uint256 expectedPayment = 10e6;
+        membership.setMaxPaymentAmount(expectedPayment - 1); // one unit below the real cost
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
+            )
+        );
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        vm.stopPrank();
+    }
+
+    function test_BuyMembershipWithinUserCap() public {
+        // No owner cap set; user supplies a per-call cap >= the real cost.
+        uint256 expectedPayment = 10e6;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment);
+        vm.stopPrank();
+
+        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
+    }
+
+    function test_RevertBuyMembershipExceedsUserCap() public {
+        // No owner cap set; user supplies a per-call cap below the real cost.
+        uint256 expectedPayment = 10e6;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
+            )
+        );
+        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment - 1);
+        vm.stopPrank();
+    }
+
+    function test_BuyMembershipUserCapZeroMeansUnlimited() public {
+        // maxPay == 0 imposes no user-side restriction, independent of price.
+        uint256 expectedPayment = 10e6;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        vm.stopPrank();
+
+        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
+    }
+
+    /// @notice Composition is min(ownerCap, userCap). Owner cap is generous (would allow
+    /// the purchase) but the user's per-call cap is stricter and must be the one that binds.
+    function test_BuyMembershipComposesMinWhenUserCapIsStricter() public {
+        uint256 expectedPayment = 10e6;
+        membership.setMaxPaymentAmount(expectedPayment * 10); // owner cap is not the limiter
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
+            )
+        );
+        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment - 1);
+        vm.stopPrank();
+    }
+
+    /// @notice Same composition, opposite direction: user cap is generous but the owner's
+    /// cap is stricter and must be the one that binds.
+    function test_BuyMembershipComposesMinWhenOwnerCapIsStricter() public {
+        uint256 expectedPayment = 10e6;
+        membership.setMaxPaymentAmount(expectedPayment - 1); // owner cap is the limiter
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
+            )
+        );
+        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment * 10);
+        vm.stopPrank();
+    }
+
+    function test_BuyMembershipSucceedsWhenBothCapsSatisfied() public {
+        uint256 expectedPayment = 10e6;
+        membership.setMaxPaymentAmount(expectedPayment);
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment);
+        vm.stopPrank();
+
+        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
     }
 }

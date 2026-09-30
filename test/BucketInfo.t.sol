@@ -14,7 +14,10 @@ contract BucketInfoTest is Test {
     address public priceFeed;
 
     event TokenWhitelisted(address indexed token, bool whitelisted);
-    event PriceUpdated(address indexed token, uint256 price);
+    // W1 (sc-oracle): PriceUpdated was split into TokenPriceInitialized (first-ever set,
+    // unbounded per A1) and TokenPriceUpdated (subsequent sets, rate-limited per A1).
+    event TokenPriceInitialized(address indexed token, uint256 price);
+    event TokenPriceUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
     event PriceFeedUpdated(address indexed token, address priceFeed);
     event PlatformFeeUpdated(uint256 newFee);
 
@@ -136,12 +139,32 @@ contract BucketInfoTest is Test {
 
         uint256 price = 2000 * 10 ** 8; // $2000 with 8 decimals
 
+        // First-ever set for tokenA: unbounded per A1, emits TokenPriceInitialized (W1).
         vm.expectEmit(true, false, false, true);
-        emit PriceUpdated(tokenA, price);
+        emit TokenPriceInitialized(tokenA, price);
 
         bucketInfo.setTokenPrice(tokenA, price);
 
         assertEq(bucketInfo.getTokenPrice(tokenA), price);
+    }
+
+    /// W1 (sc-oracle, A1): a second setTokenPrice call on the same token, within
+    /// MAX_PRICE_DEVIATION_BPS and after MIN_PRICE_UPDATE_INTERVAL, succeeds and emits
+    /// TokenPriceUpdated(token, oldPrice, newPrice).
+    function test_SetTokenPriceSecondUpdateWithinCapEmitsTokenPriceUpdated() public {
+        bucketInfo.setTokenWhitelist(tokenA, true);
+        uint256 firstPrice = 2000 * 10 ** 8;
+        bucketInfo.setTokenPrice(tokenA, firstPrice);
+
+        vm.warp(block.timestamp + bucketInfo.MIN_PRICE_UPDATE_INTERVAL());
+        uint256 secondPrice = 2100 * 10 ** 8; // +5%, within the 20% cap
+
+        vm.expectEmit(true, false, false, true);
+        emit TokenPriceUpdated(tokenA, firstPrice, secondPrice);
+
+        bucketInfo.setTokenPrice(tokenA, secondPrice);
+
+        assertEq(bucketInfo.getTokenPrice(tokenA), secondPrice);
     }
 
     function test_SetTokenPriceOnlyOwner() public {

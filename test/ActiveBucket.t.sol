@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ActiveBucket} from "../src/ActiveBucket.sol";
+import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
 import {IFlashLoanReceiver} from "../src/interfaces/IFlashLoanReceiver.sol";
 import {IBucketInfo} from "../src/interfaces/IBucketInfo.sol";
 
@@ -19,6 +20,9 @@ contract MockBucketInfoForActive {
     bool public operational = true;
     uint256 public feeRate = 100;
     address public owner;
+    /// @dev W2 (sc-vault-exit): lets a test make every `getTokenPrice` call revert regardless of
+    /// whitelist status, to prove `redeem()` no longer calls the oracle at all (INV-1).
+    bool public alwaysRevertPrice;
 
     constructor() {
         owner = msg.sender;
@@ -26,6 +30,10 @@ contract MockBucketInfoForActive {
 
     function setOwner(address _owner) external {
         owner = _owner;
+    }
+
+    function setAlwaysRevertPrice(bool _alwaysRevertPrice) external {
+        alwaysRevertPrice = _alwaysRevertPrice;
     }
 
     function isTokenValid(address token) external view returns (bool) {
@@ -37,6 +45,7 @@ contract MockBucketInfoForActive {
     }
 
     function getTokenPrice(address token) external view returns (uint256) {
+        if (alwaysRevertPrice) revert("Oracle is down");
         require(whitelisted[token], "Not whitelisted");
         return prices[token];
     }
@@ -230,7 +239,7 @@ contract ActiveBucketTest is Test {
     function test_RevertInitializeZeroBucketInfo() public {
         ActiveBucket impl = new ActiveBucket();
 
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bytes memory initData =
             abi.encodeWithSelector(ActiveBucket.initialize.selector, address(0), oneInchRouter, NAME, SYMBOL);
         new ERC1967Proxy(address(impl), initData);
@@ -239,7 +248,7 @@ contract ActiveBucketTest is Test {
     function test_RevertInitializeZeroOneInch() public {
         ActiveBucket impl = new ActiveBucket();
 
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bytes memory initData =
             abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), address(0), NAME, SYMBOL);
         new ERC1967Proxy(address(impl), initData);
@@ -308,21 +317,21 @@ contract ActiveBucketTest is Test {
 
     function test_RevertDepositZero() public {
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.ZeroAmount.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAmount.selector);
         bucket.deposit{value: 0}(address(0), 0);
     }
 
     function test_RevertDepositInvalidToken() public {
         address fake = makeAddr("fake");
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(ActiveBucket.InvalidToken.selector, fake));
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.InvalidToken.selector, fake));
         bucket.deposit(fake, 100);
     }
 
     function test_RevertDepositPlatformDown() public {
         bucketInfo.setOperational(false);
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.PlatformNotOperational.selector);
+        vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
         bucket.deposit{value: 1 ether}(address(0), 0);
     }
 
@@ -344,8 +353,12 @@ contract ActiveBucketTest is Test {
 
         uint256 shares2 = bucket.balanceOf(user2);
 
-        // Both users deposited equal amounts, should get equal shares
-        assertApproxEqAbs(shares1, shares2, 1);
+        // W2 (sc-vault-entry): user1 was the FIRST depositor, so `DEAD_SHARES` (INV-6) was
+        // carved OUT of their own mint (see BucketVaultBase.DEAD_SHARES / _processDeposit).
+        // user2's deposit is not a first deposit, so it is unaffected. Both users deposited
+        // equal value at an unchanged live price, so user1's shares plus the one-time dead-share
+        // floor should equal user2's shares exactly (up to 1 wei of integer-division rounding).
+        assertApproxEqAbs(shares1 + bucket.DEAD_SHARES(), shares2, 1);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -357,14 +370,20 @@ contract ActiveBucketTest is Test {
         bucket.deposit{value: 2 ether}(address(0), 0);
 
         uint256 shares = bucket.balanceOf(user1);
+        uint256 supply = bucket.totalSupply();
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
         bucket.redeem(shares);
 
         assertEq(bucket.balanceOf(user1), 0);
-        // Should get back approximately 2 ETH
-        assertApproxEqAbs(user1.balance - ethBefore, 2 ether, 1);
+        // W2 (sc-vault-entry): user1 is the FIRST depositor, so `DEAD_SHARES` (INV-6) was
+        // carved out of their mint and permanently locked in `totalSupply()`. A full redeem of
+        // user1's own (net) shares therefore returns balance*shares/supply, strictly less than
+        // the full 2 ether by the DEAD_SHARES fraction — not "approximately 2 ETH" as before this
+        // wave. See BucketVaultBase.DEAD_SHARES's doc comment.
+        uint256 expected = (2 ether * shares) / supply;
+        assertApproxEqAbs(user1.balance - ethBefore, expected, 1);
     }
 
     function test_RedeemPartial() public {
@@ -379,6 +398,12 @@ contract ActiveBucketTest is Test {
         assertEq(bucket.balanceOf(user1), shares / 2);
     }
 
+    // CHARACTERISATION: changed in W2 (sc-vault-exit). `redeem()` no longer computes a USD
+    // value on-chain at all (that required an oracle call, forbidden by INV-1), so
+    // `totalWithdrawValue` is no longer incremented and stays frozen at 0 across this vault's
+    // lifetime from this wave onward — see ActiveBucket.sol's doc comment on the state
+    // variable. The statistic itself is preserved off-chain via the redesigned `Redeemed`
+    // event, asserted below instead of the old on-chain accumulator.
     function test_RedeemTracksWithdrawValue() public {
         vm.prank(user1);
         bucket.deposit{value: 2 ether}(address(0), 0);
@@ -388,7 +413,63 @@ contract ActiveBucketTest is Test {
         vm.prank(user1);
         bucket.redeem(shares);
 
-        assertTrue(bucket.totalWithdrawValue() > 0);
+        assertEq(bucket.totalWithdrawValue(), 0, "totalWithdrawValue must stay frozen post-W2");
+    }
+
+    /// @notice W2 (sc-vault-exit): the `Redeemed` event's `tokens`/`amounts` are the off-chain
+    /// replacement for the on-chain `totalWithdrawValue` accumulation this test used to check.
+    /// UPDATED in W2 (sc-vault-entry): single depositor, full redeem no longer means shares ==
+    /// supply, because the FIRST deposit's mint is net of the permanent `DEAD_SHARES` floor
+    /// (INV-6) — so the payout is balance*shares/supply, not the flat deposited amount. The
+    /// expected event amount below is computed from live on-chain state, not hardcoded, so this
+    /// still asserts the FULL event body exactly.
+    function test_RedeemEmitsTokensAndAmountsForOffChainValueStatistic() public {
+        vm.prank(user1);
+        bucket.deposit{value: 2 ether}(address(0), 0);
+
+        uint256 shares = bucket.balanceOf(user1);
+        uint256 supply = bucket.totalSupply();
+
+        address[] memory expectedTokens = new address[](1);
+        expectedTokens[0] = address(0);
+        uint256[] memory expectedAmounts = new uint256[](1);
+        expectedAmounts[0] = (2 ether * shares) / supply;
+
+        vm.expectEmit(true, true, true, true);
+        // `supply` param: after the full redeem, `totalSupply()` is `DEAD_SHARES`, not 0 — the
+        // dead-shares floor (INV-6) is permanently unredeemable.
+        emit BucketVaultBase.Redeemed(user1, shares, bucket.DEAD_SHARES(), expectedTokens, expectedAmounts);
+        vm.prank(user1);
+        bucket.redeem(shares);
+    }
+
+    /// @notice THE most important test in this wave (INV-1): redemption must succeed even if
+    /// the price feed reverts on every single call. Proves `redeem()` makes zero oracle calls.
+    function test_RedeemSucceedsWithOracleAlwaysReverting() public {
+        vm.startPrank(user1);
+        bucket.deposit{value: 1 ether}(address(0), 0);
+        tokenA.approve(address(bucket), 5e18);
+        bucket.deposit(address(tokenA), 5e18);
+        vm.stopPrank();
+
+        uint256 shares = bucket.balanceOf(user1);
+        uint256 ethBefore = user1.balance;
+        uint256 tokenABefore = tokenA.balanceOf(user1);
+
+        // Make every oracle call revert, unconditionally, for every token.
+        bucketInfo.setAlwaysRevertPrice(true);
+
+        // A sanity check that the oracle really is unusable now, so this test cannot pass
+        // vacuously.
+        vm.expectRevert("Oracle is down");
+        bucketInfo.getTokenPrice(address(0));
+
+        vm.prank(user1);
+        bucket.redeem(shares);
+
+        assertEq(bucket.balanceOf(user1), 0);
+        assertTrue(user1.balance > ethBefore, "ETH payout must succeed with oracle reverting");
+        assertTrue(tokenA.balanceOf(user1) > tokenABefore, "token payout must succeed with oracle reverting");
     }
 
     function test_RedeemMultipleTokens() public {
@@ -413,7 +494,7 @@ contract ActiveBucketTest is Test {
 
     function test_RevertRedeemZero() public {
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.InvalidRedeemAmount.selector);
+        vm.expectRevert(BucketVaultBase.InvalidRedeemAmount.selector);
         bucket.redeem(0);
     }
 
@@ -424,7 +505,7 @@ contract ActiveBucketTest is Test {
         uint256 shares = bucket.balanceOf(user1);
 
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.InvalidRedeemAmount.selector);
+        vm.expectRevert(BucketVaultBase.InvalidRedeemAmount.selector);
         bucket.redeem(shares + 1);
     }
 
@@ -448,8 +529,91 @@ contract ActiveBucketTest is Test {
 
         uint256 shares = bucket.balanceOf(user1);
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.PlatformNotOperational.selector);
+        vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
         bucket.redeem(shares);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+              N5 / A3 OWNER-WITHDRAWAL-FLOOR TESTS (BUILT, UNWIRED)
+       These exercise BucketVaultBase.isOwnerWithdrawalFloorMet /
+       wouldOwnerMeetWithdrawalFloorAfterRedeem directly. Neither function is called from
+       redeem() as of W2 (sc-vault-exit) — see the doc comment on that section in
+       BucketVaultBase.sol for why (deliberate LIVE-quantity substitution for A3's literal
+       "20% of total deposited value or portfolio" wording, pending client/verification-stream
+       confirmation before ever being wired live).
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Case 1/3: below the 20% floor, both the current-state check and the
+    /// hypothetical-after-redeem check must report "not met".
+    function test_OwnerWithdrawalFloor_BlockedBelowFloor() public {
+        // Owner (address(this)) deposits a small stake; user1 deposits far more, diluting the
+        // owner to ~10% of supply — below the 20% floor.
+        bucket.deposit{value: 1 ether}(address(0), 0);
+        vm.prank(user1);
+        bucket.deposit{value: 9 ether}(address(0), 0);
+
+        assertFalse(bucket.isOwnerWithdrawalFloorMet(), "owner at ~10% must be below the 20% floor");
+
+        uint256 ownerShares = bucket.balanceOf(owner);
+        // Already below floor: redeeming everything (or anything) cannot make it "met".
+        assertFalse(
+            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem(ownerShares),
+            "already-below-floor owner cannot meet the floor after redeeming more"
+        );
+    }
+
+    /// @notice Case 2/3: at/above the 20% floor, both checks must report "met", including for a
+    /// hypothetical partial redeem that keeps the owner at/above the floor afterwards.
+    function test_OwnerWithdrawalFloor_PermittedAtOrAboveFloor() public {
+        // Owner deposits 3 ETH, user1 deposits 7 ETH -> owner holds exactly 30% of supply.
+        bucket.deposit{value: 3 ether}(address(0), 0);
+        vm.prank(user1);
+        bucket.deposit{value: 7 ether}(address(0), 0);
+
+        assertTrue(bucket.isOwnerWithdrawalFloorMet(), "owner at 30% must meet the 20% floor");
+
+        uint256 ownerShares = bucket.balanceOf(owner);
+        // Redeem a third of the owner's shares: 2/9 ~= 22.2% remains -> still >= 20%.
+        assertTrue(
+            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem(ownerShares / 3),
+            "owner redeeming down to ~22.2% must still meet the 20% floor"
+        );
+        // Redeem two-thirds instead: 1/8 = 12.5% remains -> below 20%, must report false.
+        assertFalse(
+            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem((ownerShares * 2) / 3),
+            "owner redeeming down to 12.5% must fail the 20% floor"
+        );
+    }
+
+    /// @notice Case 3/3: the R1-lockout-absence proof. The contracts plan's own §5.5 "R1"
+    /// analysis shows that a LITERAL lifetime-accumulator reading of A3 ("20% of total deposited
+    /// value") permanently locks the owner out after a single full investor deposit/exit cycle,
+    /// because a lifetime accumulator never forgets that dilution happened. This test proves the
+    /// LIVE-quantity interpretation built here does NOT have that defect: once the diluting
+    /// investor fully exits, the owner's LIVE ratio recovers on its own, with no unlock action
+    /// needed from anyone.
+    function test_OwnerWithdrawalFloor_R1LockoutAbsenceProof() public {
+        // Owner deposits first and alone: 100% of supply, floor trivially met.
+        bucket.deposit{value: 5 ether}(address(0), 0);
+        assertTrue(bucket.isOwnerWithdrawalFloorMet(), "sole owner depositor starts at 100%");
+
+        // A large investor deposit dilutes the owner to 5/50 = 10% -- now BELOW the floor.
+        vm.prank(user1);
+        bucket.deposit{value: 45 ether}(address(0), 0);
+        assertFalse(bucket.isOwnerWithdrawalFloorMet(), "owner must be diluted below the 20% floor mid-cycle");
+
+        // The investor fully exits (a complete deposit/redeem cycle on their side).
+        uint256 investorShares = bucket.balanceOf(user1);
+        vm.prank(user1);
+        bucket.redeem(investorShares);
+
+        // LIVE quantity: with the diluting investor gone, the owner is back to 100% of the
+        // (now smaller) supply. A lifetime-accumulator design would have no such recovery path --
+        // this is the R1 lockout this substitution avoids.
+        assertTrue(
+            bucket.isOwnerWithdrawalFloorMet(),
+            "LIVE ratio must recover once the diluting investor fully exits (R1 lockout absence proof)"
+        );
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -537,7 +701,7 @@ contract ActiveBucketTest is Test {
     function test_RevertFlashLoanZeroAmount() public {
         MockFlashLoanReceiver receiver = new MockFlashLoanReceiver();
 
-        vm.expectRevert(ActiveBucket.ZeroAmount.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAmount.selector);
         bucket.flashLoan(address(0), 0, address(receiver), bytes(""));
     }
 
@@ -545,7 +709,7 @@ contract ActiveBucketTest is Test {
         vm.prank(user1);
         bucket.deposit{value: 10 ether}(address(0), 0);
 
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bucket.flashLoan(address(0), 1 ether, address(0), bytes(""));
     }
 
@@ -563,7 +727,7 @@ contract ActiveBucketTest is Test {
         bucketInfo.setOperational(false);
         MockFlashLoanReceiver receiver = new MockFlashLoanReceiver();
 
-        vm.expectRevert(ActiveBucket.PlatformNotOperational.selector);
+        vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
         bucket.flashLoan(address(0), 1 ether, address(receiver), bytes(""));
     }
 
@@ -619,12 +783,12 @@ contract ActiveBucketTest is Test {
 
     function test_RevertPauseSwapAlreadyPaused() public {
         bucket.pauseSwap();
-        vm.expectRevert(ActiveBucket.SwapIsPaused.selector);
+        vm.expectRevert(BucketVaultBase.SwapIsPaused.selector);
         bucket.pauseSwap();
     }
 
     function test_RevertUnpauseSwapNotPaused() public {
-        vm.expectRevert(ActiveBucket.SwapNotPaused.selector);
+        vm.expectRevert(BucketVaultBase.SwapNotPaused.selector);
         bucket.unpauseSwap();
     }
 
@@ -649,12 +813,12 @@ contract ActiveBucketTest is Test {
 
     function test_RecoverETH() public {
         // ETH is whitelisted in our setup, so this should revert
-        vm.expectRevert(abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.CannotRecoverWhitelistedToken.selector, address(0)));
         bucket.recoverTokens(address(0), 1 ether, user1);
     }
 
     function test_RevertRecoverWhitelistedToken() public {
-        vm.expectRevert(abi.encodeWithSelector(ActiveBucket.CannotRecoverWhitelistedToken.selector, address(tokenA)));
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.CannotRecoverWhitelistedToken.selector, address(tokenA)));
         bucket.recoverTokens(address(tokenA), 100e18, user1);
     }
 
@@ -662,7 +826,7 @@ contract ActiveBucketTest is Test {
         MockERC20ForActive rogue = new MockERC20ForActive("Rogue", "RGT", 18);
         rogue.mint(address(bucket), 1000e18);
 
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bucket.recoverTokens(address(rogue), 1000e18, address(0));
     }
 
@@ -682,28 +846,28 @@ contract ActiveBucketTest is Test {
     function test_RevertSwapBy1inchNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        bucket.swapBy1inch(bytes("test"));
+        bucket.swapBy1inch(address(0), address(0), 1, 0);
     }
 
     function test_RevertSwapBy1inchSwapPaused() public {
         bucket.pauseSwap();
 
-        vm.expectRevert(ActiveBucket.SwapIsPaused.selector);
-        bucket.swapBy1inch(bytes("test"));
+        vm.expectRevert(BucketVaultBase.SwapIsPaused.selector);
+        bucket.swapBy1inch(address(0), address(0), 1, 0);
     }
 
     function test_RevertSwapBy1inchPlatformDown() public {
         bucketInfo.setOperational(false);
 
-        vm.expectRevert(ActiveBucket.PlatformNotOperational.selector);
-        bucket.swapBy1inch(bytes("test"));
+        vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
+        bucket.swapBy1inch(address(0), address(0), 1, 0);
     }
 
     function test_RevertSwapBy1inchWhenContractPaused() public {
         bucket.pause();
 
         vm.expectRevert();
-        bucket.swapBy1inch(bytes("test"));
+        bucket.swapBy1inch(address(0), address(0), 1, 0);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -724,7 +888,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertSetOneInchRouterZero() public {
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bucket.setOneInchRouter(address(0));
     }
 
@@ -789,9 +953,15 @@ contract ActiveBucketTest is Test {
         // Owner deposits first
         bucket.deposit{value: 1 ether}(address(0), 0);
 
-        // User deposits 19x more (owner will hold ~5%)
+        // W2 (sc-vault-entry): owner is the FIRST depositor, so `DEAD_SHARES` (INV-6) is carved
+        // out of the owner's own mint (see BucketVaultBase.DEAD_SHARES). This test used to size
+        // user1's deposit at exactly the 5% boundary (19x owner's stake gives owner precisely
+        // 2000/40000 = 5.00% pre-mitigation); post-mitigation the owner's net shares are
+        // 1999e18, not 2000e18, which would put the owner just BELOW 5% at that exact ratio.
+        // Sized down to 18x here so the owner clears MIN_OWNER_BPS with comfortable margin
+        // (~5.26%) rather than sitting exactly on the boundary the mitigation now shifts.
         vm.prank(user1);
-        bucket.deposit{value: 19 ether}(address(0), 0);
+        bucket.deposit{value: 18 ether}(address(0), 0);
 
         assertTrue(bucket.isBucketAccountable());
     }
@@ -866,13 +1036,19 @@ contract ActiveBucketTest is Test {
         bucket.deposit{value: amount}(address(0), 0);
 
         uint256 shares = bucket.balanceOf(user1);
+        uint256 supply = bucket.totalSupply();
         uint256 ethBefore = user1.balance;
 
         vm.prank(user1);
         bucket.redeem(shares);
 
         uint256 ethReceived = user1.balance - ethBefore;
-        assertApproxEqAbs(ethReceived, amount, 1);
+        // W2 (sc-vault-entry): this is a fresh bucket's FIRST deposit, so `DEAD_SHARES` (INV-6)
+        // was carved out of `shares`. A full redeem of `shares` (not `supply`) returns
+        // amount*shares/supply, strictly less than `amount` by the DEAD_SHARES fraction — the
+        // expected value below is computed from live on-chain state, not assumed to be `amount`.
+        uint256 expected = (amount * shares) / supply;
+        assertApproxEqAbs(ethReceived, expected, 1);
     }
 
     function testFuzz_FlashLoanFee(uint256 amount) public {
@@ -969,12 +1145,187 @@ contract ActiveBucketTest is Test {
 
         // user1 is NOT the BucketInfo owner
         vm.prank(user1);
-        vm.expectRevert(ActiveBucket.UnauthorizedBucketInfoUpdate.selector);
+        vm.expectRevert(BucketVaultBase.UnauthorizedBucketInfoUpdate.selector);
         bucket.updateBucketInfo(address(newBucketInfo));
     }
 
     function test_RevertUpdateBucketInfoZeroAddress() public {
-        vm.expectRevert(ActiveBucket.ZeroAddress.selector);
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bucket.updateBucketInfo(address(0));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+            W2 (sc-vault-entry): LIVE-NAV DEPOSIT + INV-6 TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice INV-6/B2: the classic ERC-4626-style inflation/donation attack must not zero out
+    /// a later depositor's shares, and the attacker's own claim on the pool must stay bounded to
+    /// a small fraction of it (not grow to capture the donation) no matter how large the
+    /// donation is. The attacker keeps their own real (post-carve-out) shares just barely above
+    /// zero, which is the worst case for a victim: it maximises the fraction of `totalSupply()`
+    /// that is the fixed, unclaimable `DEAD_SHARES` floor, and minimises the attacker's own
+    /// stake -- and the test shows the mitigation holds even so.
+    function test_InflationAttack_MitigatedByDeadShares() public {
+        address attacker = makeAddr("attacker");
+        tokenA.mint(attacker, 1_000_000e18);
+
+        // Attacker becomes the first depositor. 0.02002 tokenA @ $50/token = $1.001, which
+        // mints 1.001e18 raw shares (see BucketVaultBase._processDeposit: sharesToMint =
+        // depositValue * 1e18 / INITIAL_TOKEN_PRICE = 1.001e8 * 1e18 / 1e8). That clears the
+        // `FirstDepositTooSmall` floor (DEAD_SHARES = 1e18) by only 0.001e18 -- the attacker's
+        // own stake is kept as close to the floor as possible without reverting.
+        vm.startPrank(attacker);
+        tokenA.approve(address(bucket), 0.02002e18);
+        bucket.deposit(address(tokenA), 0.02002e18);
+        vm.stopPrank();
+
+        uint256 attackerShares = bucket.balanceOf(attacker);
+        assertEq(attackerShares, 0.001e18, "attacker's real (post-carve-out) stake must be exactly 0.001e18");
+
+        // Donation: a RAW transfer, not deposit() -- inflates _calculateTotalValue() with zero
+        // mint, the classic inflation-attack setup. 200,000 tokenA @ $50/token = $10,000,000,
+        // roughly 10,000,000x the attacker's own $1.001 contribution.
+        vm.prank(attacker);
+        tokenA.transfer(address(bucket), 200_000e18);
+
+        // Victim deposits a modest, realistic amount.
+        vm.startPrank(user1);
+        tokenA.approve(address(bucket), 2e18);
+        bucket.deposit(address(tokenA), 2e18);
+        vm.stopPrank();
+
+        uint256 victimShares = bucket.balanceOf(user1);
+        assertGt(victimShares, 0, "INV-6: DEAD_SHARES must keep the victim's mint nonzero even after a huge donation");
+
+        // The attacker cannot sweep the donation: their redeemable claim is bounded by their own
+        // tiny real share count relative to total supply (which is floored at DEAD_SHARES), not
+        // by the size of the donation they made outside deposit() accounting. Assert this as a
+        // FRACTION of the pool, not an absolute dollar figure -- an absolute cap would not scale
+        // to an arbitrarily larger donation, but the attacker's fraction of the pool is bounded
+        // regardless of donation size, because the donation inflates the pool for every
+        // shareholder, including the permanently-unclaimable dead-shares recipient.
+        uint256 supply = bucket.totalSupply();
+        uint256 totalValue = bucket.calculateTotalValue();
+        uint256 attackerClaimValue = (totalValue * attackerShares) / supply;
+        assertLt(
+            attackerClaimValue * 100, totalValue, "attacker's claim must stay under 1% of the pool despite the donation"
+        );
+    }
+
+    /// @notice `previewDeposit` must agree EXACTLY with what `deposit()` actually mints/values,
+    /// across both the first-ever deposit (DEAD_SHARES carve-out branch) and a later deposit
+    /// (no carve-out branch).
+    function test_PreviewDepositAgreesWithActualDeposit() public {
+        // First deposit: exercises the DEAD_SHARES carve-out branch.
+        (uint256 previewedShares1, uint256 previewedValue1) = bucket.previewDeposit(address(0), 1 ether);
+
+        vm.prank(user1);
+        bucket.deposit{value: 1 ether}(address(0), 0);
+        uint256 actualShares1 = bucket.balanceOf(user1);
+
+        assertEq(previewedShares1, actualShares1, "previewDeposit must match actual mint on first deposit");
+        assertEq(previewedValue1, ETH_PRICE, "previewDeposit's USD value must match the oracle-priced deposit value");
+
+        // Second deposit: no carve-out branch, live price unchanged since the first deposit.
+        (uint256 previewedShares2,) = bucket.previewDeposit(address(0), 3 ether);
+
+        vm.prank(user2);
+        bucket.deposit{value: 3 ether}(address(0), 0);
+        uint256 actualShares2 = bucket.balanceOf(user2);
+
+        assertEq(previewedShares2, actualShares2, "previewDeposit must match actual mint on a later deposit");
+    }
+
+    /// @notice `previewRedeem` must agree EXACTLY with what `redeem()` actually pays out, across
+    /// a multi-token holding and a partial redeem.
+    function test_PreviewRedeemAgreesWithActualRedeem() public {
+        vm.startPrank(user1);
+        bucket.deposit{value: 2 ether}(address(0), 0);
+        tokenA.approve(address(bucket), 10e18);
+        bucket.deposit(address(tokenA), 10e18);
+        vm.stopPrank();
+
+        uint256 shares = bucket.balanceOf(user1);
+        uint256 partialShares = shares / 3;
+
+        vm.prank(user1);
+        (address[] memory previewTokens, uint256[] memory previewAmounts) = bucket.previewRedeem(partialShares);
+
+        uint256 ethBefore = user1.balance;
+        uint256 tokenABefore = tokenA.balanceOf(user1);
+
+        vm.prank(user1);
+        bucket.redeem(partialShares);
+
+        uint256 ethReceived = user1.balance - ethBefore;
+        uint256 tokenAReceived = tokenA.balanceOf(user1) - tokenABefore;
+
+        // Match preview entries up by token address rather than assuming a fixed index, since
+        // held-tokens registry order is an implementation detail this test should not depend on.
+        bool sawEth = false;
+        bool sawTokenA = false;
+        for (uint256 i = 0; i < previewTokens.length; i++) {
+            if (previewTokens[i] == address(0)) {
+                assertEq(previewAmounts[i], ethReceived, "previewRedeem ETH amount must match actual payout");
+                sawEth = true;
+            } else if (previewTokens[i] == address(tokenA)) {
+                assertEq(previewAmounts[i], tokenAReceived, "previewRedeem tokenA amount must match actual payout");
+                sawTokenA = true;
+            }
+        }
+        assertTrue(sawEth && sawTokenA, "preview must cover both held tokens");
+    }
+
+    /// @notice Proves `deposit()` mints against LIVE NAV, not the STALE stored `tokenPrice`
+    /// state variable, when the oracle price moves between two deposits with NO rebalance in
+    /// between (the pre-W2 bug this wave fixes).
+    function test_LiveNavNotStale_PriceMovesBetweenDepositsWithoutRebalance() public {
+        vm.prank(user1);
+        bucket.deposit{value: 1 ether}(address(0), 0);
+
+        // What a stale-price bug would keep using for every subsequent deposit until the next
+        // rebalance: `tokenPrice` after the first-ever deposit is INITIAL_TOKEN_PRICE ($1/share).
+        uint256 stalePrice = bucket.tokenPrice();
+
+        // Double the ETH oracle price with NO rebalance in between. `addToken` is idempotent for
+        // an already-whitelisted token (MockBucketInfoForActive.addToken, this file's mock
+        // contracts section): it just updates `prices[token]`.
+        uint256 newEthPrice = ETH_PRICE * 2;
+        bucketInfo.addToken(address(0), newEthPrice);
+
+        vm.prank(user2);
+        bucket.deposit{value: 1 ether}(address(0), 0);
+        uint256 user2Shares = bucket.balanceOf(user2);
+
+        // What user2's deposit would have minted under the pre-W2 bug: the new $4000 deposit
+        // value divided by the OLD, stale $1/share basis.
+        uint256 depositValueAtNewPrice = (1 ether * newEthPrice) / 1e18;
+        uint256 staleFormulaShares = (depositValueAtNewPrice * 1e18) / stalePrice;
+
+        // Live NAV: user1's 1 ETH is now worth 2x as much with nothing else in the vault, so the
+        // live share price has also doubled (from $1/share to $2/share) even though no rebalance
+        // happened. A correctly-priced $4000 deposit against a $2/share live basis mints half of
+        // what the stale $1/share basis would have minted.
+        assertLt(user2Shares, staleFormulaShares, "deposit() must not mint against the stale tokenPrice");
+        assertApproxEqAbs(
+            user2Shares * 2, staleFormulaShares, 2, "live price move must be reflected exactly, not partially"
+        );
+    }
+
+    /// @notice `sharePrice()` defaults to `INITIAL_TOKEN_PRICE` ($1, workspace CLAUDE.md §6) on a
+    /// totally fresh, empty vault (zero supply / zero value), and matches the live NAV formula
+    /// once the vault holds a real deposit.
+    function test_SharePrice_DefaultsToOneUsdOnEmptyVaultThenTracksLiveNav() public {
+        assertEq(bucket.totalSupply(), 0);
+        assertEq(bucket.sharePrice(), 1e8, "a fresh, empty vault must default to the $1 INITIAL_TOKEN_PRICE");
+
+        vm.prank(user1);
+        bucket.deposit{value: 1 ether}(address(0), 0);
+
+        uint256 supply = bucket.totalSupply();
+        uint256 totalValue = bucket.calculateTotalValue();
+        uint256 expectedPrice = (totalValue * 1e18) / supply;
+
+        assertEq(bucket.sharePrice(), expectedPrice, "sharePrice() must match the live NAV formula post-deposit");
     }
 }

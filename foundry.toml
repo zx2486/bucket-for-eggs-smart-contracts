@@ -53,7 +53,7 @@ fail_on_revert = true
 # works across chains including Polygon).
 [etherscan]
 mainnet = { key = "${ETHERSCAN_API_KEY}" }
-sepolia = { key = "${ETHERSCAN_API_KEY}" }\
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
 polygon = { key = "${ETHERSCAN_API_KEY}" }
 polygon_amoy = { key = "${ETHERSCAN_API_KEY}" }
 

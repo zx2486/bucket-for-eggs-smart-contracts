@@ -59,14 +59,15 @@ contract DeployPassiveBucketSepolia is Script {
         console.log("Implementation deployed at:", address(implementation));
 
         // Step 2: Deploy the factory
+        // W1.7: bucketInfoAddr is now a constructor-time, factory-immutable parameter, not a
+        // per-call argument to createPassiveBucket -- see src/PassiveBucketFactory.sol `bucketInfo`.
         console.log("Step 2: Deploying PassiveBucketFactory...");
-        PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation));
+        PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), bucketInfoAddr);
         console.log("Factory deployed at:", address(factory));
 
         // Step 3: Create a PassiveBucket proxy via the factory
         console.log("Step 3: Creating PassiveBucket proxy via factory...");
-        address proxyAddr =
-            factory.createPassiveBucket(bucketInfoAddr, dists, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
+        address proxyAddr = factory.createPassiveBucket(dists, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
         PassiveBucket passiveBucket = PassiveBucket(payable(proxyAddr));
         console.log("Proxy deployed at:", proxyAddr);
 

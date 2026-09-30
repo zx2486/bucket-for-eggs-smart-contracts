@@ -16,10 +16,11 @@ pragma solidity ^0.8.33;
 // Extending target selectors to deposit(ERC20)/rebalanceBy1inch/rebalanceByDex is future work,
 // not claimed here.
 
-import {Test} from "forge-std/Test.sol";
+import {Test, console} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {PassiveBucket} from "../src/PassiveBucket.sol";
+import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
 import {MockBucketInfoForPassive, MockERC20, MockOneInchRouter} from "./PassiveBucket.t.sol";
 
 /// @dev Handler restricted to ETH-only deposit/redeem so the ghost accounting below is exact
@@ -33,6 +34,11 @@ contract PassiveBucketDepositRedeemHandler is Test {
     uint256 public ghost_sumSharesBurned;
     uint256 public ghost_depositCalls;
     uint256 public ghost_redeemCalls;
+    /// @dev Counts `BucketVaultBase.NothingToRedeem()` reverts tolerated by `redeem` below.
+    /// A verifier should check this is nonzero over a real run -- zero here would mean the
+    /// tolerated branch is dead code and the try/catch below is unexercised, not proof that
+    /// zero-payout redemptions never happen.
+    uint256 public ghost_redeemNothingToRedeemTolerated;
 
     constructor(PassiveBucket _bucket, address[] memory _actors) {
         bucket = _bucket;
@@ -47,12 +53,27 @@ contract PassiveBucketDepositRedeemHandler is Test {
         address actor = _actor(actorSeed);
         uint256 amount = bound(amountSeed, 0.001 ether, 5 ether);
 
+        // W2 (sc-vault-entry) added a subtractive DEAD_SHARES inflation-attack mitigation
+        // (BucketVaultBase._processDeposit, INV-6/B2): on the very first-ever deposit, a fixed
+        // DEAD_SHARES amount is minted to a separate DEAD_SHARES_RECIPIENT address, carved out of
+        // (not added on top of) the depositor's own mint. That mint is a real, permanent addition
+        // to totalSupply() that this handler's actor-balance-delta accounting below cannot see,
+        // because it never lands in `actor`'s own balance. Detect the 0 -> nonzero totalSupply()
+        // transition this call causes and account for it once, alongside (not instead of) the
+        // existing actor-delta line -- see W2-SC-ENTRY-REPORT.md's suggested fix and
+        // W2-ORCHESTRATOR-NOTE-INVARIANT-FIX.md for why this is an orchestrator-level fix, not
+        // sc-vault-entry's own (hard rule 6 -- this file is outside that agent's ownership scope).
+        bool isFirstEverDeposit = bucket.totalSupply() == 0;
+
         uint256 sharesBefore = bucket.balanceOf(actor);
         vm.prank(actor);
         bucket.deposit{value: amount}(address(0), 0);
         uint256 sharesAfter = bucket.balanceOf(actor);
 
         ghost_sumSharesMinted += (sharesAfter - sharesBefore);
+        if (isFirstEverDeposit) {
+            ghost_sumSharesMinted += bucket.DEAD_SHARES();
+        }
         ghost_depositCalls += 1;
     }
 
@@ -63,10 +84,26 @@ contract PassiveBucketDepositRedeemHandler is Test {
 
         uint256 shares = bound(sharesSeed, 1, actorBalance);
         vm.prank(actor);
-        bucket.redeem(shares);
-
-        ghost_sumSharesBurned += shares;
-        ghost_redeemCalls += 1;
+        // W2 (sc-vault-exit) added BucketVaultBase.NothingToRedeem() when a proportional
+        // payout would floor to zero on every held token for a `shares` count that is small
+        // relative to large held-token balances -- an intentional, correct revert (see
+        // W2-SC-EXIT-REPORT.md "Blocked" item 1), not a bug in share-price accounting.
+        // Tolerate ONLY this selector; any other revert reason is bubbled up unchanged so it
+        // still fails the run -- swallowing all reverts here would make this invariant suite
+        // vacuous again, exactly what root CLAUDE.md §5.4 / INV-vacuity warns against.
+        try bucket.redeem(shares) {
+            ghost_sumSharesBurned += shares;
+            ghost_redeemCalls += 1;
+        } catch (bytes memory lowLevelData) {
+            if (bytes4(lowLevelData) != BucketVaultBase.NothingToRedeem.selector) {
+                assembly {
+                    revert(add(lowLevelData, 0x20), mload(lowLevelData))
+                }
+            }
+            // else: no-op, matches the actorBalance == 0 no-op above in spirit -- a
+            // zero-payout redeem attempt correctly rejected, not a state change to account for.
+            ghost_redeemNothingToRedeemTolerated += 1;
+        }
     }
 }
 
@@ -144,5 +181,16 @@ contract W0InvariantPassiveBucketTest is Test {
         if (bucket.totalSupply() > 0) {
             assertGt(bucket.tokenPrice(), 0);
         }
+    }
+
+    /// @dev forge-std calls this once after each invariant run completes. Not itself an
+    /// assertion -- it exists so `ghost_redeemNothingToRedeemTolerated` is visible in run
+    /// output (`-vv` or higher) without a separate script, so a verifier can confirm the
+    /// tolerated-revert branch in the handler's `redeem` is actually being exercised and not
+    /// silently dead code (same non-vacuity discipline as the revert-rate table forge already
+    /// prints -- root CLAUDE.md §5.4).
+    function afterInvariant() public view {
+        console.log("ghost_redeemCalls:", handler.ghost_redeemCalls());
+        console.log("ghost_redeemNothingToRedeemTolerated:", handler.ghost_redeemNothingToRedeemTolerated());
     }
 }

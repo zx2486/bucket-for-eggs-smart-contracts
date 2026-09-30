@@ -115,7 +115,7 @@ contract PureMembershipFactoryTest is Test {
 
         bucketInfo = new MockBucketInfoForFactory();
         implementation = new PureMembership();
-        factory = new PureMembershipFactory(address(implementation));
+        factory = new PureMembershipFactory(address(implementation), address(bucketInfo));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -126,9 +126,21 @@ contract PureMembershipFactoryTest is Test {
         assertEq(factory.implementation(), address(implementation));
     }
 
+    // W1.7: bucketInfo is now a constructor parameter, stored immutable.
+    function test_Constructor_StoresBucketInfo() public view {
+        assertEq(factory.bucketInfo(), address(bucketInfo));
+    }
+
     function test_Constructor_ZeroAddressReverts() public {
         vm.expectRevert(PureMembershipFactory.InvalidImplementation.selector);
-        new PureMembershipFactory(address(0));
+        new PureMembershipFactory(address(0), address(bucketInfo));
+    }
+
+    // W1.7: the constructor's new second parameter gets its own zero-check, independent of the
+    // implementation zero-check above.
+    function test_Constructor_ZeroBucketInfoReverts() public {
+        vm.expectRevert(PureMembershipFactory.InvalidBucketInfo.selector);
+        new PureMembershipFactory(address(implementation), address(0));
     }
 
     function test_Constructor_InitialProxyCountIsZero() public view {
@@ -146,14 +158,14 @@ contract PureMembershipFactoryTest is Test {
 
     function test_Create_DeploysProxy() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address proxy = factory.createPureMembership(configs, URI);
         assertTrue(proxy != address(0));
     }
 
     function test_Create_OwnerIsCallerNotFactory() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.prank(alice);
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         assertEq(PureMembership(proxy).owner(), alice);
     }
@@ -161,21 +173,23 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_OwnerIsNotFactory() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.prank(alice);
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         assertTrue(PureMembership(proxy).owner() != address(factory));
     }
 
     function test_Create_BucketInfoIsSet() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         assertEq(address(PureMembership(proxy).bucketInfo()), address(bucketInfo));
+        // W1.7: the vault's bucketInfo must equal the FACTORY's own immutable value.
+        assertEq(address(PureMembership(proxy).bucketInfo()), factory.bucketInfo());
     }
 
     function test_Create_MembershipConfigsAreSet() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
         PureMembership pm = PureMembership(proxy);
 
         assertEq(pm.getConfiguredTokenIdCount(), 3);
@@ -193,16 +207,15 @@ contract PureMembershipFactoryTest is Test {
         assertEq(premium.duration, PREMIUM_DURATION);
     }
 
-    function test_Create_ZeroBucketInfoReverts() public {
-        PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        vm.expectRevert(PureMembershipFactory.InvalidBucketInfo.selector);
-        factory.createPureMembership(configs, address(0), URI);
-    }
+    // W1.7: createPureMembership no longer accepts a caller-supplied BucketInfo address, so there
+    // is nothing left for this call site to revert on. The zero-check now lives on the
+    // constructor's `bucketInfo_` parameter -- see test_Constructor_ZeroBucketInfoReverts above.
+    function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public {}
 
     function test_Create_EmptyConfigsAllowed() public {
         // Zero configs is valid; owner can add configs later
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
         assertEq(PureMembership(proxy).getConfiguredTokenIdCount(), 0);
     }
 
@@ -213,7 +226,7 @@ contract PureMembershipFactoryTest is Test {
         // so we check that exactly one event with the correct indexed args is emitted.
         vm.recordLogs();
         vm.prank(alice);
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         // Verify the event via the returned proxy address
         assertEq(PureMembership(proxy).owner(), alice);
@@ -227,18 +240,21 @@ contract PureMembershipFactoryTest is Test {
         vm.prank(alice);
         vm.expectEmit(false, true, true, false); // skip proxy (unknown), check owner + bucketInfo
         emit PureMembershipCreated(address(0), alice, address(bucketInfo), URI);
-        factory.createPureMembership(configs, address(bucketInfo), URI);
+        factory.createPureMembership(configs, URI);
     }
 
     function test_Create_ProxyIsIndependentOfImplementation() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        // Calling initialize on the implementation directly should revert (already disabled)
+        // Calling initialize on the implementation directly should revert (already disabled).
+        // NOTE: PureMembership.initialize() itself is unchanged by W1.7 -- it still takes
+        // bucketInfo as its second parameter. Only the FACTORY's createPureMembership() dropped
+        // the parameter (the factory now supplies its own immutable bucketInfo internally).
         vm.expectRevert();
         implementation.initialize(configs, address(bucketInfo), URI);
 
         // But factory deploy still works fine
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
         assertTrue(proxy != payable(0));
     }
 
@@ -248,7 +264,7 @@ contract PureMembershipFactoryTest is Test {
 
     function test_Tracking_SingleDeployment() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         assertEq(factory.getDeployedProxiesCount(), 1);
         assertEq(factory.deployedProxies(0), proxy);
@@ -258,10 +274,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, URI);
 
         vm.prank(bob);
-        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy2 = factory.createPureMembership(configs, URI);
 
         assertEq(factory.getDeployedProxiesCount(), 2);
         assertEq(factory.deployedProxies(0), proxy1);
@@ -271,8 +287,8 @@ contract PureMembershipFactoryTest is Test {
     function test_Tracking_ProxiesAreUnique() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, URI);
+        address payable proxy2 = factory.createPureMembership(configs, URI);
 
         assertTrue(proxy1 != proxy2);
     }
@@ -280,9 +296,9 @@ contract PureMembershipFactoryTest is Test {
     function test_Tracking_GetAllDeployedProxies() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address payable proxy3 = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy1 = factory.createPureMembership(configs, URI);
+        address payable proxy2 = factory.createPureMembership(configs, URI);
+        address payable proxy3 = factory.createPureMembership(configs, URI);
 
         address[] memory proxies = factory.getAllDeployedProxies();
         assertEq(proxies.length, 3);
@@ -299,10 +315,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, URI);
 
         vm.prank(bob);
-        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, URI);
 
         assertEq(PureMembership(proxyAlice).owner(), alice);
         assertEq(PureMembership(proxyBob).owner(), bob);
@@ -312,10 +328,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, URI);
 
         vm.prank(bob);
-        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, URI);
 
         // Alice pauses her contract
         vm.prank(alice);
@@ -325,12 +341,16 @@ contract PureMembershipFactoryTest is Test {
         assertFalse(PureMembership(proxyBob).paused());
     }
 
+    // W1.7: two different BucketInfo pointers can no longer coexist on ONE factory -- bucketInfo
+    // is factory-immutable. Isolation across BucketInfo pointers is now demonstrated by deploying
+    // two separate factories, each with its own immutable bucketInfo.
     function test_Isolation_DifferentBucketInfos() public {
         MockBucketInfoForFactory bucketInfo2 = new MockBucketInfoForFactory();
+        PureMembershipFactory factory2 = new PureMembershipFactory(address(implementation), address(bucketInfo2));
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        address payable proxy1 = factory.createPureMembership(configs, address(bucketInfo), URI);
-        address payable proxy2 = factory.createPureMembership(configs, address(bucketInfo2), URI);
+        address payable proxy1 = factory.createPureMembership(configs, URI);
+        address payable proxy2 = factory2.createPureMembership(configs, URI);
 
         assertEq(address(PureMembership(proxy1).bucketInfo()), address(bucketInfo));
         assertEq(address(PureMembership(proxy2).bucketInfo()), address(bucketInfo2));
@@ -340,10 +360,10 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        address payable proxyAlice = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyAlice = factory.createPureMembership(configs, URI);
 
         vm.prank(bob);
-        address payable proxyBob = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxyBob = factory.createPureMembership(configs, URI);
 
         // Alice tries to pause Bob's contract — should revert
         vm.prank(alice);
@@ -369,7 +389,7 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(caller);
-        address payable proxy = factory.createPureMembership(configs, address(bucketInfo), URI);
+        address payable proxy = factory.createPureMembership(configs, URI);
 
         assertEq(PureMembership(proxy).owner(), caller);
     }
@@ -379,10 +399,68 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         for (uint256 i = 0; i < count; i++) {
-            factory.createPureMembership(configs, address(bucketInfo), URI);
+            factory.createPureMembership(configs, URI);
         }
 
         assertEq(factory.getDeployedProxiesCount(), count);
         assertEq(factory.getAllDeployedProxies().length, count);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+            W1.7 -- FACTORY-IMMUTABLE BUCKETINFO POINTER TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    // (1) The old caller-supplied-bucketInfo call shape no longer resolves to any selector on
+    // this factory. createPureMembership used to be
+    // (PureMembership.MembershipConfig[],address,string) -- 3 args, bucketInfo SECOND (not
+    // first, unlike the other two factories). It is now (PureMembership.MembershipConfig[],string)
+    // -- 2 args. A raw low-level call built against the OLD selector must fail to resolve.
+    function test_W17_OldThreeArgCallShapeNoLongerResolvesToAnySelector() public {
+        PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
+        bytes memory oldShapeCalldata = abi.encodeWithSignature(
+            "createPureMembership((uint256,uint256,string,uint256,uint256)[],address,string)",
+            configs,
+            address(bucketInfo),
+            URI
+        );
+        (bool success,) = address(factory).call(oldShapeCalldata);
+        assertFalse(success, "old 3-arg createPureMembership selector must not resolve post-W1.7");
+    }
+
+    // (2) The resulting vault's bucketInfo() getter equals the FACTORY's own immutable value,
+    // never anything a caller could supply (there is no longer a parameter to supply it through).
+    function test_W17_VaultBucketInfoGetterEqualsFactoryImmutable() public {
+        PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
+        vm.prank(alice);
+        address payable proxy = factory.createPureMembership(configs, URI);
+        assertEq(address(PureMembership(proxy).bucketInfo()), factory.bucketInfo());
+    }
+
+    // (3) The PureMembershipCreated event's bucketInfo field matches the factory's immutable value.
+    function test_W17_CreatedEventBucketInfoFieldMatchesFactoryImmutable() public {
+        PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
+        vm.expectEmit(false, true, true, true);
+        emit PureMembershipCreated(address(0), address(this), factory.bucketInfo(), URI);
+        factory.createPureMembership(configs, URI);
+    }
+
+    // (4) Pre-fix-vulnerability proof: before W1.7, createPureMembership accepted a caller-supplied
+    // BucketInfo address as its second parameter with only a zero-check (no genuineness check).
+    // A malicious caller could point their new membership contract at an attacker-controlled
+    // BucketInfo-shaped contract, defeating the 00:44 oracle protection for that contract's
+    // members. Post-fix, the call signature has no such parameter at all -- the
+    // attacker-controlled contract below is constructed, but there is no way to pass it into
+    // createPureMembership; every membership contract this factory creates is pinned to the
+    // factory's own immutable, platform-supplied bucketInfo.
+    function test_W17_PreFixVulnerability_AttackerControlledBucketInfoCannotBeInjectedAtCreateTime() public {
+        MockBucketInfoForFactory attackerBucketInfo = new MockBucketInfoForFactory();
+        attackerBucketInfo.addToken(address(0), 1);
+
+        PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
+        vm.prank(makeAddr("attacker"));
+        address payable proxy = factory.createPureMembership(configs, URI);
+
+        assertEq(address(PureMembership(proxy).bucketInfo()), address(bucketInfo));
+        assertTrue(address(PureMembership(proxy).bucketInfo()) != address(attackerBucketInfo));
     }
 }

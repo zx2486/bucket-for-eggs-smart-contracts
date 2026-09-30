@@ -16,6 +16,12 @@ contract PureMembershipFactory {
     /// @notice The PureMembership implementation contract used by all proxies
     address public immutable implementation;
 
+    /// @notice The BucketInfo contract every proxy deployed through this factory is wired to.
+    /// @dev W1.7: constructor-set-and-immutable, never caller-supplied. See the identical doc
+    /// comment on `ActiveBucketFactory.bucketInfo` for the full rationale (workspace CLAUDE.md
+    /// §1.1 precondition under the ownership table).
+    address public immutable bucketInfo;
+
     /// @notice All proxy addresses deployed through this factory
     address[] public deployedProxies;
 
@@ -32,10 +38,13 @@ contract PureMembershipFactory {
     /**
      * @notice Constructor
      * @param implementation_ Address of the deployed PureMembership implementation contract
+     * @param bucketInfo_ Address of the BucketInfo contract every proxy from this factory will use
      */
-    constructor(address implementation_) {
+    constructor(address implementation_, address bucketInfo_) {
         if (implementation_ == address(0)) revert InvalidImplementation();
+        if (bucketInfo_ == address(0)) revert InvalidBucketInfo();
         implementation = implementation_;
+        bucketInfo = bucketInfo_;
     }
 
     /**
@@ -43,20 +52,20 @@ contract PureMembershipFactory {
      * @dev The caller becomes the owner of the new contract.  All membership
      * configuration is set at construction time; additional configs can be
      * added later by the owner through `addMembershipConfig`.
-     * @param configs       Initial membership tier configurations
-     * @param bucketInfoAddr Address of the BucketInfo contract
-     * @param uri           ERC-1155 metadata URI (e.g. "https://api.example.com/metadata/{id}.json")
+     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is no longer a
+     * caller-supplied parameter (W1.7; see the doc comment on {bucketInfo}).
+     * @param configs Initial membership tier configurations
+     * @param uri     ERC-1155 metadata URI (e.g. "https://api.example.com/metadata/{id}.json")
      * @return proxy Address of the newly deployed PureMembership proxy
      */
-    function createPureMembership(
-        PureMembership.MembershipConfig[] calldata configs,
-        address bucketInfoAddr,
-        string calldata uri
-    ) external returns (address payable proxy) {
-        if (bucketInfoAddr == address(0)) revert InvalidBucketInfo();
-
-        // Encode the initializer call
-        bytes memory initData = abi.encodeCall(PureMembership.initialize, (configs, bucketInfoAddr, uri));
+    function createPureMembership(PureMembership.MembershipConfig[] calldata configs, string calldata uri)
+        external
+        returns (address payable proxy)
+    {
+        // Encode the initializer call using the factory's own immutable bucketInfo, never a
+        // caller-supplied value. Arity unchanged from before this fix (3 args) -- only the
+        // source of the bucketInfo argument's value changed.
+        bytes memory initData = abi.encodeCall(PureMembership.initialize, (configs, bucketInfo, uri));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = payable(new ERC1967Proxy(implementation, initData));
@@ -69,7 +78,7 @@ contract PureMembershipFactory {
         // Track the deployment
         deployedProxies.push(proxy);
 
-        emit PureMembershipCreated(proxy, msg.sender, bucketInfoAddr, uri);
+        emit PureMembershipCreated(proxy, msg.sender, bucketInfo, uri);
     }
 
     /**

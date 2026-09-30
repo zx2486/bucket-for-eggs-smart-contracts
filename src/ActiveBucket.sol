@@ -1,22 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {
-    ERC20BurnableUpgradeable
-} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IBucketInfo} from "./interfaces/IBucketInfo.sol";
 import {IFlashLoanReceiver} from "./interfaces/IFlashLoanReceiver.sol";
+import {BucketVaultBase} from "./base/BucketVaultBase.sol";
 
 /**
  * @title ActiveBucket
@@ -26,16 +16,11 @@ import {IFlashLoanReceiver} from "./interfaces/IFlashLoanReceiver.sol";
  * Users deposit tokens to receive shares and redeem shares to receive proportional tokens.
  * @dev Uses UUPS proxy pattern. Similar to PassiveBucket but without bucket distributions,
  * accountability requirements, or DefiSwap rebalancing.
+ * W1 (sc-refactor-base): inherits shared deposit-accounting/value/oracle-consumption logic from
+ * {BucketVaultBase}. All state variables below stay declared here, at their pre-refactor linear
+ * slots — none were moved into the base contract. See W1-SCR-REFACTOR-REPORT.md.
  */
-contract ActiveBucket is
-    Initializable,
-    ERC20Upgradeable,
-    ERC20BurnableUpgradeable,
-    PausableUpgradeable,
-    OwnableUpgradeable,
-    ReentrancyGuardTransient,
-    UUPSUpgradeable
-{
+contract ActiveBucket is BucketVaultBase {
     using SafeERC20 for IERC20;
 
     /*//////////////////////////////////////////////////////////////
@@ -58,25 +43,21 @@ contract ActiveBucket is
     uint256 public totalDepositValue;
 
     /// @notice Total withdrawn value in USD (8 decimals)
+    /// @dev W2 (sc-vault-exit): no longer incremented by `redeem()`. The computation required an
+    /// oracle call (`_calculateValueOfShares` -> `_bucketInfo().getTokenPrice`), which INV-1
+    /// forbids on the exit path (workspace CLAUDE.md §"What this project is": "no oracle call,
+    /// no external price, no whitelist iteration on any path a user takes to exit"). Per root
+    /// CLAUDE.md §8 ("Do not remove `totalWithdrawValue`... move the computation off-chain via
+    /// an event; do not delete the capability"), this getter is preserved but is now a frozen
+    /// historical value as of the last pre-W2 redemption on this vault — it does not grow
+    /// further. The statistic itself moves off-chain: an indexer derives it from the redesigned
+    /// `Redeemed` event's `tokens`/`amounts` plus its own price history. See
+    /// BucketVaultBase.sol's `Redeemed` event doc comment.
     uint256 public totalWithdrawValue;
 
-    /// @notice Precision constant for share calculations
-    uint256 public constant PRECISION = 1e18;
-
-    /// @notice Initial share price ($1 in 8-decimal USD)
-    uint256 public constant INITIAL_TOKEN_PRICE = 1e8;
-
-    /// @notice Basis points denominator
-    uint256 public constant BPS_DENOMINATOR = 10000;
-
-    /// @notice Maximum value loss for 1inch swap (0.5% = 50 bps)
-    uint256 public constant MAX_VALUE_LOSS_BPS = 50;
-
-    /// @notice Flash loan interest rate (2% = 200 bps)
+    /// @notice Flash loan interest rate (2% = 200 bps). ActiveBucket-only; PassiveBucket has no
+    /// flash-loan feature, so this is not shared via BucketVaultBase.
     uint256 public constant FLASH_LOAN_FEE_BPS = 200;
-
-    /// @notice Minimum owner holding (5% in basis points)
-    uint256 public constant MIN_OWNER_BPS = 500;
 
     /// @notice Performance fee in basis points
     uint256 public performanceFeeBps;
@@ -84,61 +65,38 @@ contract ActiveBucket is
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
+    // Deposited, Redeemed, TokenReturned, SwapPauseChanged, TokensRecovered, BucketInfoUpdated
+    // moved to BucketVaultBase (byte-identical declarations, verified against PassiveBucket's
+    // matching events before the move). ActiveBucket-only events stay here.
 
-    event Deposited(
-        address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUsd
-    );
-    event Redeemed(address indexed user, uint256 sharesRedeemed);
-    event TokenReturned(address indexed user, address indexed token, uint256 amount);
-    event SwapPauseChanged(bool paused);
     event SwapExecuted(
         address indexed caller, uint256 totalValueBefore, uint256 totalValueAfter, uint256 newTokenPrice
     );
     event FlashLoan(
         address indexed initiator, address indexed receiver, address indexed token, uint256 amount, uint256 fee
     );
-    event TokensRecovered(address indexed token, address indexed to, uint256 amount);
     event OneInchRouterUpdated(address indexed newRouter);
     event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUsd);
     event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUsd);
     event PerformanceFeeUpdated(uint256 newFeeBps);
-    event BucketInfoUpdated(address indexed oldBucketInfo, address indexed newBucketInfo, address indexed updatedBy);
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
     //////////////////////////////////////////////////////////////*/
+    // PlatformNotOperational, InvalidToken, ZeroAddress, ZeroAmount, InvalidRedeemAmount,
+    // SwapIsPaused, SwapNotPaused, InsufficientShares, ETHTransferFailed, SwapFailed,
+    // ValueLossTooHigh, CannotRecoverWhitelistedToken, UnauthorizedBucketInfoUpdate moved to
+    // BucketVaultBase. ActiveBucket-only (flash-loan-specific) errors stay here.
 
-    error PlatformNotOperational();
-    error InvalidToken(address token);
-    error ZeroAddress();
-    error ZeroAmount();
-    error InvalidRedeemAmount();
-    error SwapIsPaused();
-    error SwapNotPaused();
-    error InsufficientShares();
-    error ETHTransferFailed();
-    error SwapFailed();
-    error ValueLossTooHigh(uint256 valueBefore, uint256 valueAfter);
     error InsufficientBalance();
     error InsufficientRepayment(uint256 expected, uint256 actual);
-    error CannotRecoverWhitelistedToken(address token);
-    error UnauthorizedBucketInfoUpdate();
 
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
     //////////////////////////////////////////////////////////////*/
-
-    modifier whenPlatformOperational() {
-        if (!bucketInfo.isPlatformOperational()) {
-            revert PlatformNotOperational();
-        }
-        _;
-    }
-
-    modifier whenSwapNotPaused() {
-        if (swapPaused) revert SwapIsPaused();
-        _;
-    }
+    // whenPlatformOperational / whenSwapNotPaused moved to BucketVaultBase, rewritten there
+    // against the _bucketInfo()/_swapPaused() hooks below instead of these local state vars
+    // directly — identical behavior.
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -156,14 +114,14 @@ contract ActiveBucket is
     /**
      * @notice Initializes the ActiveBucket contract
      * @param bucketInfoAddr The BucketInfo contract address
-     * @param _oneInchRouter The 1inch aggregation router address
+     * @param oneInchRouterAddr The 1inch aggregation router address
      */
-    function initialize(address bucketInfoAddr, address _oneInchRouter, string memory name, string memory symbol)
+    function initialize(address bucketInfoAddr, address oneInchRouterAddr, string memory name, string memory symbol)
         external
         initializer
     {
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
-        if (_oneInchRouter == address(0)) revert ZeroAddress();
+        if (oneInchRouterAddr == address(0)) revert ZeroAddress();
 
         __ERC20_init(name, symbol);
         __ERC20Burnable_init();
@@ -173,7 +131,7 @@ contract ActiveBucket is
         // __UUPSUpgradeable_init();
 
         bucketInfo = IBucketInfo(bucketInfoAddr);
-        oneInchRouter = _oneInchRouter;
+        oneInchRouter = oneInchRouterAddr;
 
         performanceFeeBps = 1400; // 14% default
     }
@@ -184,6 +142,10 @@ contract ActiveBucket is
 
     /**
      * @notice Deposit a whitelisted token and receive share tokens
+     * @dev W2 (sc-vault-entry): mints against the vault's LIVE NAV
+     * (`_calculateTotalValue()`/`totalSupply()`), not the stale `tokenPrice` state variable —
+     * see `BucketVaultBase._processDeposit`'s doc comment. `tokenPrice` is now kept
+     * continuously live-synced on every deposit (not just on rebalance) as a side effect.
      * @param token The token address (address(0) for ETH)
      * @param amount The amount to deposit (ignored for ETH; msg.value is used)
      */
@@ -194,38 +156,20 @@ contract ActiveBucket is
         whenNotPaused
         whenPlatformOperational
     {
-        if (!bucketInfo.isTokenValid(token)) revert InvalidToken(token);
-
-        uint256 actualAmount;
-        if (token == address(0)) {
-            actualAmount = msg.value;
-        } else {
-            actualAmount = amount;
-            IERC20(token).safeTransferFrom(msg.sender, address(this), actualAmount);
-        }
-        if (actualAmount == 0) revert ZeroAmount();
-
-        if (tokenPrice == 0) {
-            tokenPrice = INITIAL_TOKEN_PRICE;
-        }
-
-        uint256 oraclePrice = bucketInfo.getTokenPrice(token);
-        if (oraclePrice == 0) revert InvalidToken(token);
-        uint8 decimals = _getTokenDecimals(token);
-        uint256 depositValue = (actualAmount * oraclePrice) / (10 ** decimals);
-
-        uint256 sharesToMint = (depositValue * PRECISION) / tokenPrice;
-        if (sharesToMint == 0) revert ZeroAmount();
+        (uint256 actualAmount, uint256 sharesToMint, uint256 depositValue, uint256 newSharePrice) =
+            _processDeposit(token, amount);
 
         totalDepositValue += depositValue;
-        _mint(msg.sender, sharesToMint);
+        tokenPrice = newSharePrice;
 
         emit Deposited(msg.sender, token, actualAmount, sharesToMint, depositValue);
     }
 
     /**
      * @notice Redeem shares for proportional underlying tokens
-     * @dev Returns all whitelisted tokens proportionally to actual contract holdings
+     * @dev W2 (sc-vault-exit): returns tokens the vault actually holds (the held-tokens
+     * registry maintained by `deposit()`/swap paths since W1), not the full BucketInfo
+     * whitelist — see INV-1 and the in-function comments below.
      * @param shares The number of share tokens to redeem
      */
     function redeem(uint256 shares) external nonReentrant whenNotPaused whenPlatformOperational {
@@ -234,18 +178,32 @@ contract ActiveBucket is
         }
 
         uint256 supply = totalSupply();
-        address[] memory tokens = bucketInfo.getWhitelistedTokens();
+        // Explicit panic-to-revert conversion (W2): division-by-zero below would panic (0x12)
+        // if `supply` were 0. Unreachable today — `shares > 0` and
+        // `shares <= balanceOf(msg.sender) <= supply` together guarantee `supply > 0` — but
+        // guarded explicitly rather than relying on that invariant implicitly.
+        if (supply == 0) revert InvalidRedeemAmount();
+
+        // INV-1 (workspace CLAUDE.md; 04-CONTRACTS-IMPLEMENTATION-PLAN.md §3): redemption
+        // depends on nothing but share arithmetic — no oracle call, no whitelist iteration. W2
+        // (sc-vault-exit): enumerate the held-tokens registry instead of
+        // `bucketInfo.getWhitelistedTokens()`. This also fixes a latent defect in the prior
+        // code: a token de-whitelisted by BucketInfo's owner after users deposited it would
+        // silently vanish from this loop, stranding those users' funds; the held-tokens
+        // registry does not depend on the current whitelist at all.
+        address[] memory tokens = _heldTokensList();
 
         // Calculate return amounts before burning
         uint256[] memory returnAmounts = new uint256[](tokens.length);
+        bool anyPayout = false;
         for (uint256 i = 0; i < tokens.length; i++) {
             uint256 balance = _getTokenBalance(tokens[i]);
             returnAmounts[i] = (balance * shares) / supply;
+            if (returnAmounts[i] > 0) anyPayout = true;
         }
-
-        // Track withdrawal value
-        uint256 withdrawValue = _calculateValueOfShares(shares, supply);
-        totalWithdrawValue += withdrawValue;
+        // W2 (sc-vault-exit): revert on an all-zero payout (e.g. `shares` so small every
+        // per-token amount rounds down to 0) instead of silently burning shares for nothing.
+        if (!anyPayout) revert NothingToRedeem();
 
         // Burn shares
         _burn(msg.sender, shares);
@@ -254,11 +212,31 @@ contract ActiveBucket is
         for (uint256 i = 0; i < tokens.length; i++) {
             if (returnAmounts[i] > 0) {
                 _transferToken(tokens[i], msg.sender, returnAmounts[i]);
+                // Keep the held-tokens registry accurate if this payout fully drains a token —
+                // mirrors the sync PassiveBucket's swap paths already perform post-swap.
+                _syncHeldTokenByBalance(tokens[i]);
                 emit TokenReturned(msg.sender, tokens[i], returnAmounts[i]);
             }
         }
 
-        emit Redeemed(msg.sender, shares);
+        // W2 (sc-vault-exit): `Redeemed` redesigned (BucketVaultBase.sol doc comment) — USD
+        // value is no longer computed on-chain here (that required the oracle call INV-1
+        // forbids); `totalWithdrawValue` is preserved as a getter but no longer incremented,
+        // per root CLAUDE.md §8. The event carries token amounts so an off-chain indexer can
+        // reconstruct the same statistic from its own price history.
+        emit Redeemed(msg.sender, shares, totalSupply(), tokens, returnAmounts);
+    }
+
+    /**
+     * @notice Preview the tokens/amounts a `redeem(shares)` call would produce for
+     * `msg.sender` against the CURRENT on-chain state, without mutating anything.
+     * @dev ActiveBucket.redeem has no owner-accountability check (unlike PassiveBucket.redeem —
+     * see PassiveBucket.previewRedeem's doc comment), so this is exactly
+     * `BucketVaultBase._previewRedeemCore` with no extra wrapper.
+     * @param shares The number of share tokens to preview redeeming
+     */
+    function previewRedeem(uint256 shares) external view returns (address[] memory tokens, uint256[] memory amounts) {
+        return _previewRedeemCore(shares);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -267,10 +245,19 @@ contract ActiveBucket is
 
     /**
      * @notice Execute a swap via 1inch aggregation router (owner only)
-     * @dev Does not check distribution or accountability. Value loss must be < 0.5%.
-     * @param swapCalldata The encoded calldata for the 1inch router
+     * @dev W2 (sc-swap) rewrite: replaced the caller-supplied `bytes calldata swapCalldata` with
+     * four typed parameters — this contract (via the shared BucketVaultBase._execute1inchSwap)
+     * now builds 100% of the router calldata itself, so there is no arbitrary-calldata surface
+     * left even though this entry point is `onlyOwner`. See BucketVaultBase.sol's contract-level
+     * doc comment and `_execute1inchSwap`'s doc comment for the full rationale (INV-2, INV-9,
+     * hard rule 12 / R-V1). Does not check distribution or accountability. Value loss must be
+     * < 0.5% per call (existing) AND within the cumulative per-epoch budget (new, W2).
+     * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
+     * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
+     * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
+     * @param minReturn Minimum acceptable `dstToken` out; must clear an oracle-derived floor.
      */
-    function swapBy1inch(bytes calldata swapCalldata)
+    function swapBy1inch(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
         external
         onlyOwner
         nonReentrant
@@ -278,21 +265,19 @@ contract ActiveBucket is
         whenSwapNotPaused
         whenPlatformOperational
     {
-        uint256 totalValueBefore = _calculateTotalValue();
         uint256 beforeTokenPrice = tokenPrice;
 
-        (bool success,) = oneInchRouter.call(swapCalldata);
-        if (!success) revert SwapFailed();
+        // Mechanical call-and-value-loss-check is shared (BucketVaultBase._execute1inchSwap);
+        // access control (onlyOwner, above) and fee handling (below) stay local — see
+        // BucketVaultBase's contract-level doc comment for why this split is intentional.
+        (uint256 totalValueBefore, uint256 totalValueAfter) = _execute1inchSwap(srcToken, dstToken, amount, minReturn);
 
-        uint256 totalValueAfter = _calculateTotalValue();
-
-        // Check value loss < 0.5%
-        if (totalValueAfter < totalValueBefore) {
-            uint256 maxLoss = (totalValueBefore * MAX_VALUE_LOSS_BPS) / BPS_DENOMINATOR;
-            if (totalValueBefore - totalValueAfter > maxLoss) {
-                revert ValueLossTooHigh(totalValueBefore, totalValueAfter);
-            }
-        }
+        // W2 (sc-swap): close the cross-wave gap flagged by sc-vault-exit — PassiveBucket already
+        // re-syncs the held-tokens registry after a swap (see PassiveBucket.rebalanceBy1inch); a
+        // 1inch swap can move this vault from holding zero of `dstToken` to holding some, or from
+        // some `srcToken` down to zero, and the registry (consumed by redeem()'s payout token
+        // list) must reflect that.
+        _syncAllHeldTokensFromWhitelist();
 
         // Send performance fee to BucketInfo and owner
         uint256 tokenTotalSupply = totalSupply();
@@ -384,28 +369,10 @@ contract ActiveBucket is
     /*//////////////////////////////////////////////////////////////
                         ADMIN FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    /**
-     * @notice Recover tokens accidentally sent to the contract (non-whitelisted only)
-     * @param token The token address to recover
-     * @param amount The amount to recover
-     * @param to The recipient address
-     */
-    function recoverTokens(address token, uint256 amount, address to) external onlyOwner {
-        if (to == address(0)) revert ZeroAddress();
-        if (bucketInfo.isTokenWhitelisted(token)) {
-            revert CannotRecoverWhitelistedToken(token);
-        }
-
-        if (token == address(0)) {
-            (bool success,) = to.call{value: amount}("");
-            if (!success) revert ETHTransferFailed();
-        } else {
-            IERC20(token).safeTransfer(to, amount);
-        }
-
-        emit TokensRecovered(token, to, amount);
-    }
+    // recoverTokens, updateBucketInfo moved to BucketVaultBase (byte-identical logic, verified
+    // against PassiveBucket's matching functions before the move; the one cosmetic change is
+    // recoverTokens now calling the shared _transferToken helper instead of inlining the
+    // ETH-call/safeTransfer branch — same behavior, matching PassiveBucket's pre-existing style).
 
     /**
      * @notice Update the 1inch router address
@@ -427,75 +394,21 @@ contract ActiveBucket is
         emit PerformanceFeeUpdated(_performanceFeeBps);
     }
 
-    /**
-     * @notice Update the BucketInfo contract address
-     * @dev Can only be called by the current owner of the BucketInfo contract
-     * @param newBucketInfo The new BucketInfo contract address
-     */
-    function updateBucketInfo(address newBucketInfo) external {
-        if (newBucketInfo == address(0)) revert ZeroAddress();
-
-        // Only the current BucketInfo owner can update
-        address bucketInfoOwner = IBucketInfo(address(bucketInfo)).owner();
-        if (msg.sender != bucketInfoOwner) revert UnauthorizedBucketInfoUpdate();
-
-        address oldBucketInfo = address(bucketInfo);
-        bucketInfo = IBucketInfo(newBucketInfo);
-
-        emit BucketInfoUpdated(oldBucketInfo, newBucketInfo, msg.sender);
-    }
-
     /*//////////////////////////////////////////////////////////////
                           VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    /// @notice Calculate total value of all whitelisted tokens held by the contract
-    function calculateTotalValue() external view returns (uint256) {
-        return _calculateTotalValue();
-    }
+    // calculateTotalValue() moved to BucketVaultBase (byte-identical wrapper around the shared
+    // _calculateTotalValue()).
 
     /*//////////////////////////////////////////////////////////////
                       INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    function _calculateTotalValue() internal view returns (uint256) {
-        address[] memory tokens = bucketInfo.getWhitelistedTokens();
-        uint256 totalValue = 0;
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 balance = _getTokenBalance(tokens[i]);
-            if (balance > 0) {
-                uint256 price = bucketInfo.getTokenPrice(tokens[i]);
-                if (price == 0) revert InvalidToken(tokens[i]);
-                uint8 dec = _getTokenDecimals(tokens[i]);
-                totalValue += (balance * price) / (10 ** dec);
-            }
-        }
-        return totalValue;
-    }
-
-    function _calculateValueOfShares(uint256 shares, uint256 supply) internal view returns (uint256) {
-        if (supply == 0) return 0;
-        return (_calculateTotalValue() * shares) / supply;
-    }
-
-    function _getTokenBalance(address token) internal view returns (uint256) {
-        if (token == address(0)) return address(this).balance;
-        return IERC20(token).balanceOf(address(this));
-    }
-
-    function _getTokenDecimals(address token) internal view returns (uint8) {
-        if (token == address(0)) return 18;
-        return IERC20Metadata(token).decimals();
-    }
-
-    function _transferToken(address token, address to, uint256 amount) internal {
-        if (token == address(0)) {
-            (bool success,) = to.call{value: amount}("");
-            if (!success) revert ETHTransferFailed();
-        } else {
-            IERC20(token).safeTransfer(to, amount);
-        }
-    }
+    // _calculateTotalValue, _calculateValueOfShares, _getTokenBalance, _getTokenDecimals,
+    // _transferToken moved to BucketVaultBase. Verified identical logic against PassiveBucket's
+    // matching helpers before the move: ActiveBucket previously inlined the per-token value
+    // calculation directly here instead of naming it `_getTokenValue`; PassiveBucket already had
+    // the named helper, and both iterated the same `bucketInfo.getWhitelistedTokens()` universe,
+    // so unifying `_calculateTotalValue` around the shared `_getTokenValue` changes no behavior.
 
     /**
      * @dev Handle fee distribution and token price updates after swapping or flash loan repayment. Distributes performance fees to BucketInfo and owner, and updates token price based on new total value.
@@ -562,14 +475,30 @@ contract ActiveBucket is
         return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
     }
 
-    /**
-     * @notice Check if the owner holds at least 5% of total supply
-     * @return True if owner holds >= 5% or total supply is 0
-     */
-    function isBucketAccountable() public view returns (bool) {
-        uint256 supply = totalSupply();
-        if (supply == 0) return true;
-        return (balanceOf(owner()) * BPS_DENOMINATOR) / supply >= MIN_OWNER_BPS;
+    // isBucketAccountable() moved to BucketVaultBase (byte-identical logic, verified against
+    // PassiveBucket's matching function before the move).
+
+    /*//////////////////////////////////////////////////////////////
+                    BucketVaultBase ABSTRACT HOOKS
+    //////////////////////////////////////////////////////////////*/
+    // Thin overrides exposing this contract's own linear state variables to the shared base
+    // logic, without moving that state out of ActiveBucket (see the storage-layout note at the
+    // top of BucketVaultBase.sol).
+
+    function _bucketInfo() internal view override returns (IBucketInfo) {
+        return bucketInfo;
+    }
+
+    function _setBucketInfo(address newBucketInfo) internal override {
+        bucketInfo = IBucketInfo(newBucketInfo);
+    }
+
+    function _oneInchRouter() internal view override returns (address) {
+        return oneInchRouter;
+    }
+
+    function _swapPaused() internal view override returns (bool) {
+        return swapPaused;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
