@@ -20,6 +20,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -63,6 +64,12 @@ contract SecurityMockBucketInfo {
         return false;
     }
 
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     function isPlatformOperational() external view returns (bool) {
         return operational;
     }
@@ -89,6 +96,18 @@ contract SecurityMockBucketInfo {
             whitelistedList.push(token);
         }
         prices[token] = price;
+    }
+
+    // --- W4.2a regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
     }
 
     receive() external payable {}
@@ -205,7 +224,11 @@ contract PostFixRebalanceBy1inchAttackBlockedTest is Test {
 
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
-        implementation = new PassiveBucket();
+        ImplementationRegistry registry = new ImplementationRegistry(address(this));
+        implementation = new PassiveBucket(address(registry));
+        // Task #33 (W1.7 direct-proxy-bypass fix): this test deploys its proxy directly, so the
+        // test contract itself must be an authorized "factory".
+        registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
         dists[0] = PassiveBucket.BucketDistribution(address(tokenB), 100);

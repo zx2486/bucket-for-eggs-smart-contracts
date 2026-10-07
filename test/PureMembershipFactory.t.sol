@@ -4,6 +4,7 @@ pragma solidity ^0.8.33;
 import {Test} from "forge-std/Test.sol";
 import {PureMembership} from "../src/PureMembership.sol";
 import {PureMembershipFactory} from "../src/PureMembershipFactory.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -61,6 +62,28 @@ contract MockBucketInfoForFactory {
         operational = _operational;
     }
 
+    // --- W4.2b regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     receive() external payable {}
 }
 
@@ -72,6 +95,10 @@ contract PureMembershipFactoryTest is Test {
     PureMembership public implementation;
     PureMembershipFactory public factory;
     MockBucketInfoForFactory public bucketInfo;
+    // W3.3: platform-owned registry PureMembership's immutable constructor parameter now
+    // requires. Not exercised by these factory tests -- deployed purely so
+    // `new PureMembership(address)` compiles.
+    ImplementationRegistry public registry;
 
     address public deployer;
     address public alice;
@@ -114,8 +141,12 @@ contract PureMembershipFactoryTest is Test {
         bob = makeAddr("bob");
 
         bucketInfo = new MockBucketInfoForFactory();
-        implementation = new PureMembership();
+        registry = new ImplementationRegistry(deployer);
+        implementation = new PureMembership(address(registry));
         factory = new PureMembershipFactory(address(implementation), address(bucketInfo));
+        // Task #33 (W1.7 direct-proxy-bypass fix): see ActiveBucketFactory.t.sol's identical
+        // comment -- `msg.sender` inside `initialize()` is `factory`, not the external caller.
+        registry.setAuthorizedFactory(address(factory), true);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -347,6 +378,7 @@ contract PureMembershipFactoryTest is Test {
     function test_Isolation_DifferentBucketInfos() public {
         MockBucketInfoForFactory bucketInfo2 = new MockBucketInfoForFactory();
         PureMembershipFactory factory2 = new PureMembershipFactory(address(implementation), address(bucketInfo2));
+        registry.setAuthorizedFactory(address(factory2), true);
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         address payable proxy1 = factory.createPureMembership(configs, URI);

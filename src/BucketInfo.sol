@@ -2,10 +2,12 @@
 pragma solidity ^0.8.33;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
+import {TimelockedAdmin} from "./libs/TimelockedAdmin.sol";
 
 /**
  * @title BucketInfo
@@ -17,8 +19,10 @@ import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
  * - Price feeds for tokens/coins (to be integrated with Chainlink)
  * - Platform configuration
  */
-contract BucketInfo is Ownable, Pausable {
+contract BucketInfo is Ownable2Step, Pausable {
     using SafeERC20 for IERC20;
+    using TimelockedAdmin for TimelockedAdmin.AddressTimelock;
+    using TimelockedAdmin for TimelockedAdmin.UintTimelock;
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
@@ -37,6 +41,21 @@ contract BucketInfo is Ownable, Pausable {
     event MaxPriceStalenessUpdated(address indexed token, uint256 newMaxStaleness);
     event PlatformFeeUpdated(uint256 newFee);
     event FeesWithdrawn(address indexed tokenAddr, address indexed to, uint256 amount);
+
+    /// @dev W3.4 timelock events. One Proposed/Canceled pair per timelocked setter family
+    /// (whitelist additions, price feeds, platform fee); the corresponding *Updated/
+    /// *Whitelisted event above (already existed pre-W3) is reused to signal the applied
+    /// change at execute time, so indexers built against the old event names keep working.
+    event WhitelistAdditionProposed(address indexed token, uint256 eta);
+    event WhitelistAdditionCanceled(address indexed token);
+    event PriceFeedProposed(address indexed token, address priceFeed, uint256 eta);
+    event PriceFeedCanceled(address indexed token, address canceledPriceFeed);
+    event PlatformFeeProposed(uint256 newFee, uint256 eta);
+    event PlatformFeeCanceled(uint256 canceledFee);
+
+    /// @dev W4.1 (D2, compliance blacklist): single event covers both add and remove, mirroring
+    /// {TokenWhitelisted}'s own single-event-with-bool convention.
+    event AddressBlacklistUpdated(address indexed account, bool blacklisted);
 
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
@@ -91,11 +110,40 @@ contract BucketInfo is Ownable, Pausable {
     /// Client-specified.
     uint256 public constant MIN_PRICE_UPDATE_INTERVAL = 1 hours;
 
+    /// @dev W3.4: delay enforced between proposing and executing a platform-fee change, a
+    /// price-feed change, or a whitelist ADDITION on this contract. NO EXACT NUMBER WAS
+    /// CLIENT-SPECIFIED for BucketInfo's own setters -- the client's 48-hour figure
+    /// (`09-DECISION-LOG.md` §10.1) was given for the VAULT upgrade timelock, a different
+    /// setter. This reuses that figure as an Inferred default because the rug-pull shape is
+    /// identical (root CLAUDE.md §1.1's oracle-swap protection, and B5's "a newly whitelisted
+    /// token becomes swappable/depositable instantly") and because platform-wide consistency
+    /// is preferable to inventing a second, unexplained delay. Flagged for the client to
+    /// confirm or override -- see W3-SC-GOVERNANCE-REPORT.md `## Corrections to my briefing`.
+    uint256 public constant PLATFORM_SETTER_TIMELOCK_DELAY = 48 hours;
+
     /// @dev Native token (ETH) address representation
     address public constant NATIVE_TOKEN = address(0);
 
     /// @dev Accumulated fees withdrawn by token address
     mapping(address => uint256) public accumulatedFeesWithdrawn;
+
+    /// @dev W3.4 timelock state: one pending platform-fee proposal (global, not per-token),
+    /// one pending price-feed proposal per token, one pending whitelist-addition proposal per
+    /// token. Whitelist-addition proposals have no meaningful "value" beyond the token address
+    /// itself (already the mapping key), so `pending` is set to the sentinel `1` purely to
+    /// distinguish "a proposal exists" from the zeroed default -- only `eta` carries real
+    /// timing information for this one.
+    TimelockedAdmin.UintTimelock private _platformFeeTimelock;
+    mapping(address => TimelockedAdmin.AddressTimelock) private _priceFeedTimelocks;
+    mapping(address => TimelockedAdmin.UintTimelock) private _whitelistAdditionTimelocks;
+
+    /// @dev W4.1 (D2): fail-closed compliance blacklist. Deliberately a single flat mapping
+    /// with an O(1) getter ({isBlacklisted}) -- no loop, no external call -- INV-7 requires this
+    /// getter be safe to call from every token contract's transfer hook on every deposit/
+    /// redeem/transfer. No enumeration array is kept here (unlike {whitelistedTokens}): nothing
+    /// in the plan requires walking "all blacklisted addresses" on-chain, and adding one would
+    /// be unbounded growth with no offsetting invariant.
+    mapping(address => bool) private _blacklisted;
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -118,57 +166,104 @@ contract BucketInfo is Ownable, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @dev Add or remove a token from whitelist
+     * @notice Propose adding `token` to the whitelist. W3.4 -- ADDITIONS are timelocked
+     * (B5): a newly-whitelisted token becomes swappable/depositable platform-wide the
+     * instant it lands, so investors get the same PLATFORM_SETTER_TIMELOCK_DELAY exit-aware
+     * window as a price feed or fee change. REMOVAL stays immediate ({removeTokenWhitelist})
+     * -- pulling a bad token out can never need to wait, and a delayed removal would leave a
+     * known-bad token live for the whole window it was supposed to protect against.
      * @param token Address of the token (use address(0) for native ETH)
-     * @param whitelisted True to whitelist, false to remove
      */
-    function setTokenWhitelist(address token, bool whitelisted) external onlyOwner {
-        require(isWhitelisted[token] != whitelisted, "Already in desired state");
+    function proposeWhitelistAddition(address token) external onlyOwner {
+        require(!isWhitelisted[token], "Already in desired state");
+        _whitelistAdditionTimelocks[token].propose(1, PLATFORM_SETTER_TIMELOCK_DELAY);
+        emit WhitelistAdditionProposed(token, _whitelistAdditionTimelocks[token].eta);
+    }
 
-        isWhitelisted[token] = whitelisted;
+    /// @notice Apply a previously proposed whitelist addition for `token` once its timelock
+    /// has elapsed.
+    function executeWhitelistAddition(address token) external onlyOwner {
+        _whitelistAdditionTimelocks[token].execute();
+        require(!isWhitelisted[token], "Already in desired state");
 
-        if (whitelisted) {
-            whitelistedTokens.push(token);
-        } else {
-            // Remove from array
-            for (uint256 i = 0; i < whitelistedTokens.length; i++) {
-                if (whitelistedTokens[i] == token) {
-                    whitelistedTokens[i] = whitelistedTokens[whitelistedTokens.length - 1];
-                    whitelistedTokens.pop();
-                    break;
-                }
-            }
-        }
+        isWhitelisted[token] = true;
+        whitelistedTokens.push(token);
+        emit TokenWhitelisted(token, true);
+    }
 
-        emit TokenWhitelisted(token, whitelisted);
+    /// @notice Cancel a pending whitelist addition for `token` before it executes.
+    function cancelWhitelistAddition(address token) external onlyOwner {
+        _whitelistAdditionTimelocks[token].cancel();
+        emit WhitelistAdditionCanceled(token);
     }
 
     /**
-     * @dev Batch whitelist multiple tokens
-     * @param tokens Array of token addresses
-     * @param whitelisted True to whitelist, false to remove
+     * @notice Remove `token` from the whitelist. Immediate, no timelock (B5) -- see
+     * {proposeWhitelistAddition}'s doc comment for why removal and addition are asymmetric.
+     * @param token Address of the token (use address(0) for native ETH)
      */
-    function batchSetTokenWhitelist(address[] calldata tokens, bool whitelisted) external onlyOwner {
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (isWhitelisted[tokens[i]] != whitelisted) {
-                isWhitelisted[tokens[i]] = whitelisted;
+    function removeTokenWhitelist(address token) external onlyOwner {
+        require(isWhitelisted[token], "Already in desired state");
 
-                if (whitelisted) {
-                    whitelistedTokens.push(tokens[i]);
-                } else {
-                    // Remove from array
-                    for (uint256 j = 0; j < whitelistedTokens.length; j++) {
-                        if (whitelistedTokens[j] == tokens[i]) {
-                            whitelistedTokens[j] = whitelistedTokens[whitelistedTokens.length - 1];
-                            whitelistedTokens.pop();
-                            break;
-                        }
-                    }
-                }
+        isWhitelisted[token] = false;
 
-                emit TokenWhitelisted(tokens[i], whitelisted);
+        for (uint256 i = 0; i < whitelistedTokens.length; i++) {
+            if (whitelistedTokens[i] == token) {
+                whitelistedTokens[i] = whitelistedTokens[whitelistedTokens.length - 1];
+                whitelistedTokens.pop();
+                break;
             }
         }
+
+        emit TokenWhitelisted(token, false);
+    }
+
+    /// @notice Batch convenience wrapper over {proposeWhitelistAddition}.
+    function batchProposeWhitelistAdditions(address[] calldata tokens) external onlyOwner {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            require(!isWhitelisted[tokens[i]], "Already in desired state");
+            _whitelistAdditionTimelocks[tokens[i]].propose(1, PLATFORM_SETTER_TIMELOCK_DELAY);
+            emit WhitelistAdditionProposed(tokens[i], _whitelistAdditionTimelocks[tokens[i]].eta);
+        }
+    }
+
+    /// @notice Batch convenience wrapper over {executeWhitelistAddition}.
+    function batchExecuteWhitelistAdditions(address[] calldata tokens) external onlyOwner {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            _whitelistAdditionTimelocks[tokens[i]].execute();
+            require(!isWhitelisted[tokens[i]], "Already in desired state");
+            isWhitelisted[tokens[i]] = true;
+            whitelistedTokens.push(tokens[i]);
+            emit TokenWhitelisted(tokens[i], true);
+        }
+    }
+
+    /// @notice Batch convenience wrapper over {removeTokenWhitelist}.
+    function batchRemoveTokenWhitelist(address[] calldata tokens) external onlyOwner {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (isWhitelisted[tokens[i]]) {
+                isWhitelisted[tokens[i]] = false;
+                for (uint256 j = 0; j < whitelistedTokens.length; j++) {
+                    if (whitelistedTokens[j] == tokens[i]) {
+                        whitelistedTokens[j] = whitelistedTokens[whitelistedTokens.length - 1];
+                        whitelistedTokens.pop();
+                        break;
+                    }
+                }
+                emit TokenWhitelisted(tokens[i], false);
+            }
+        }
+    }
+
+    /// @notice Whether a whitelist-addition proposal is currently pending for `token`.
+    function pendingWhitelistAddition(address token) external view returns (bool) {
+        return _whitelistAdditionTimelocks[token].eta != 0;
+    }
+
+    /// @notice The execution timestamp of the pending whitelist-addition proposal for `token`
+    /// (0 if none).
+    function whitelistAdditionEta(address token) external view returns (uint256) {
+        return _whitelistAdditionTimelocks[token].eta;
     }
 
     /**
@@ -256,28 +351,71 @@ contract BucketInfo is Ownable, Pausable {
     }
 
     /**
-     * @dev Set Chainlink price feed for a token
+     * @notice Propose a new Chainlink price feed for `token`. W3.4 -- same setter category
+     * as the oracle-swap protection at root CLAUDE.md §1.1 ("even contract owners should not
+     * able to change it" -- that line is about `updateBucketInfo`'s cross-contract case, but
+     * a price feed swap on THIS contract carries the identical rug-pull shape, so it gets the
+     * identical delay). Overwrites any existing proposal for this token.
      * @param token Address of the token
      * @param priceFeed Address of the Chainlink price feed
      */
-    function setPriceFeed(address token, address priceFeed) external onlyOwner {
+    function proposePriceFeed(address token, address priceFeed) external onlyOwner {
         require(isWhitelisted[token], "Token not whitelisted");
         require(priceFeed != address(0), "Invalid price feed address");
-
-        priceFeedsChainlink[token] = priceFeed;
-        emit PriceFeedUpdated(token, priceFeed);
+        _priceFeedTimelocks[token].propose(priceFeed, PLATFORM_SETTER_TIMELOCK_DELAY);
+        emit PriceFeedProposed(token, priceFeed, _priceFeedTimelocks[token].eta);
     }
 
-    function batchSetPriceFeeds(address[] calldata tokens, address[] calldata priceFeeds) external onlyOwner {
-        require(tokens.length == priceFeeds.length, "Arrays length mismatch");
+    /**
+     * @notice Apply a previously proposed price feed for `token` once its timelock has
+     * elapsed. Re-checks whitelist status at execution time -- a token removed from the
+     * whitelist during the window must not have its price feed installed anyway.
+     */
+    function executePriceFeed(address token) external onlyOwner {
+        address newFeed = _priceFeedTimelocks[token].execute();
+        require(isWhitelisted[token], "Token not whitelisted");
+        priceFeedsChainlink[token] = newFeed;
+        emit PriceFeedUpdated(token, newFeed);
+    }
 
+    /// @notice Cancel a pending price feed proposal for `token` before it executes.
+    function cancelPriceFeed(address token) external onlyOwner {
+        address canceled = _priceFeedTimelocks[token].pending;
+        _priceFeedTimelocks[token].cancel();
+        emit PriceFeedCanceled(token, canceled);
+    }
+
+    /// @notice Batch convenience wrapper over {proposePriceFeed} -- identical per-token
+    /// semantics and checks, just looped. Not a bulk-update exemption from the timelock.
+    function proposeBatchPriceFeeds(address[] calldata tokens, address[] calldata priceFeeds) external onlyOwner {
+        require(tokens.length == priceFeeds.length, "Arrays length mismatch");
         for (uint256 i = 0; i < tokens.length; i++) {
             require(isWhitelisted[tokens[i]], "Token not whitelisted");
             require(priceFeeds[i] != address(0), "Invalid price feed address");
-
-            priceFeedsChainlink[tokens[i]] = priceFeeds[i];
-            emit PriceFeedUpdated(tokens[i], priceFeeds[i]);
+            _priceFeedTimelocks[tokens[i]].propose(priceFeeds[i], PLATFORM_SETTER_TIMELOCK_DELAY);
+            emit PriceFeedProposed(tokens[i], priceFeeds[i], _priceFeedTimelocks[tokens[i]].eta);
         }
+    }
+
+    /// @notice Batch convenience wrapper over {executePriceFeed}.
+    function executeBatchPriceFeeds(address[] calldata tokens) external onlyOwner {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            address newFeed = _priceFeedTimelocks[tokens[i]].execute();
+            require(isWhitelisted[tokens[i]], "Token not whitelisted");
+            priceFeedsChainlink[tokens[i]] = newFeed;
+            emit PriceFeedUpdated(tokens[i], newFeed);
+        }
+    }
+
+    /// @notice The currently pending price feed proposal for `token`, if any.
+    function pendingPriceFeed(address token) external view returns (address) {
+        return _priceFeedTimelocks[token].pending;
+    }
+
+    /// @notice The execution timestamp of the pending price feed proposal for `token` (0 if
+    /// none).
+    function priceFeedEta(address token) external view returns (uint256) {
+        return _priceFeedTimelocks[token].eta;
     }
 
     /**
@@ -467,13 +605,47 @@ contract BucketInfo is Ownable, Pausable {
     }
 
     /**
-     * @dev Set platform fee
+     * @notice Propose a new platform fee. W3.4 -- platform fee is no longer settable in one
+     * step; it must clear PLATFORM_SETTER_TIMELOCK_DELAY before {executePlatformFee} can apply
+     * it. Overwrites any existing proposal (TimelockedAdmin.propose semantics).
      * @param newFee Fee in basis points (100 = 1%)
      */
-    function setPlatformFee(uint256 newFee) external onlyOwner {
+    function proposePlatformFee(uint256 newFee) external onlyOwner {
+        require(newFee <= MAX_PLATFORM_FEE, "Fee exceeds maximum");
+        _platformFeeTimelock.propose(newFee, PLATFORM_SETTER_TIMELOCK_DELAY);
+        emit PlatformFeeProposed(newFee, _platformFeeTimelock.eta);
+    }
+
+    /**
+     * @notice Apply a previously proposed platform fee once its timelock has elapsed.
+     * Re-validates the cap at execution time as well as proposal time, in case
+     * MAX_PLATFORM_FEE semantics are ever revisited -- belt-and-suspenders, not currently
+     * reachable since the cap cannot change within one proposal's window.
+     */
+    function executePlatformFee() external onlyOwner {
+        uint256 newFee = _platformFeeTimelock.execute();
         require(newFee <= MAX_PLATFORM_FEE, "Fee exceeds maximum");
         platformFee = newFee;
         emit PlatformFeeUpdated(newFee);
+    }
+
+    /// @notice Cancel a pending platform fee proposal before it executes.
+    function cancelPlatformFee() external onlyOwner {
+        uint256 canceled = _platformFeeTimelock.pending;
+        _platformFeeTimelock.cancel();
+        emit PlatformFeeCanceled(canceled);
+    }
+
+    /// @notice The currently pending platform fee proposal, if any (0 if none pending --
+    /// note 0 is also a valid fee value, so cross-check {platformFeeEta} != 0 to distinguish
+    /// "no proposal" from "a proposal to set the fee to zero").
+    function pendingPlatformFee() external view returns (uint256) {
+        return _platformFeeTimelock.pending;
+    }
+
+    /// @notice The execution timestamp of the pending platform fee proposal (0 if none).
+    function platformFeeEta() external view returns (uint256) {
+        return _platformFeeTimelock.eta;
     }
 
     /**
@@ -537,6 +709,88 @@ contract BucketInfo is Ownable, Pausable {
         accumulatedFeesWithdrawn[NATIVE_TOKEN] += amount;
 
         emit FeesWithdrawn(NATIVE_TOKEN, to, amount);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        GOVERNANCE (W3 — Q14.2)
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Thrown by {renounceOwnership}, which is always disabled. Q14.2
+    /// (`10-BLOCKER-14-DECOMPOSITION-ANSWER.md:6-7`): "If we want to make the contract ownerless,
+    /// we will change the owner into a DAO contract (not in scope yet)" -- `transferOwnership`
+    /// (inherited from `Ownable2Step`, two-step per Q14.5/D-3) stays the only route to a new
+    /// owner; renouncing is never that route.
+    error RenounceOwnershipDisabled();
+
+    /// @notice Always reverts. Universal across every contract in this system that has an
+    /// ownership base (root CLAUDE.md §8, Q14.2) -- `BucketInfo` must never become ownerless via
+    /// renunciation.
+    function renounceOwnership() public override {
+        revert RenounceOwnershipDisabled();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    COMPLIANCE -- BLACKLIST (W4.1, D2)
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Whether `account` is blacklisted. INV-7: pure storage read, no external call, no
+    /// loop, no oracle -- every token contract's transfer hook (W4.2) calls this on every
+    /// deposit/redeem/transfer, so it must stay O(1) and revert-free by construction.
+    /// @dev Client requirement (`00-EXECUTIVE-SUMMARY-USER-REPLY.md:19`): "Addresses on the
+    /// blacklist will not able to do anything with any contract in this project, no matter
+    /// deposit, withdraw, rebalance, or even transferring the contract tokens." This getter is
+    /// the single source of truth every contract in the system checks to honour that.
+    /// @param account The address to check.
+    /// @return True if `account` is currently blacklisted.
+    function isBlacklisted(address account) external view returns (bool) {
+        return _blacklisted[account];
+    }
+
+    /// @notice Add `account` to the compliance blacklist. Immediate -- no timelock, by design:
+    /// mirrors {removeTokenWhitelist}'s own "removal is immediate" rationale (a delayed freeze
+    /// would let a bad actor act before it takes effect), and here the immediate action IS the
+    /// freeze itself.
+    /// @dev Inferred design choice: gated on this contract's own `onlyOwner`, i.e. the platform,
+    /// never a vault's own owner (a customer) -- root CLAUDE.md §1.1's precedent that
+    /// compliance/oracle-shaped powers stay with the platform, not the tenant. Flagged for the
+    /// client to confirm; see this wave's report `## Corrections to my briefing`.
+    function blacklistAddress(address account) external onlyOwner {
+        require(account != address(0), "Invalid address");
+        require(!_blacklisted[account], "Already in desired state");
+        _blacklisted[account] = true;
+        emit AddressBlacklistUpdated(account, true);
+    }
+
+    /// @notice Remove `account` from the compliance blacklist. Immediate, same rationale as
+    /// {blacklistAddress}.
+    function removeBlacklist(address account) external onlyOwner {
+        require(_blacklisted[account], "Already in desired state");
+        _blacklisted[account] = false;
+        emit AddressBlacklistUpdated(account, false);
+    }
+
+    /// @notice Batch convenience wrapper over {blacklistAddress}. Mirrors
+    /// {batchRemoveTokenWhitelist}'s forgiving style (skip a no-op entry rather than revert the
+    /// whole batch) -- a compliance sweep should not fail entirely because one address in the
+    /// list was already blacklisted.
+    function batchBlacklistAddresses(address[] calldata accounts) external onlyOwner {
+        for (uint256 i = 0; i < accounts.length; i++) {
+            if (accounts[i] != address(0) && !_blacklisted[accounts[i]]) {
+                _blacklisted[accounts[i]] = true;
+                emit AddressBlacklistUpdated(accounts[i], true);
+            }
+        }
+    }
+
+    /// @notice Batch convenience wrapper over {removeBlacklist}. Same forgiving style as
+    /// {batchBlacklistAddresses}.
+    function batchRemoveBlacklist(address[] calldata accounts) external onlyOwner {
+        for (uint256 i = 0; i < accounts.length; i++) {
+            if (_blacklisted[accounts[i]]) {
+                _blacklisted[accounts[i]] = false;
+                emit AddressBlacklistUpdated(accounts[i], false);
+            }
+        }
     }
 
     /*//////////////////////////////////////////////////////////////

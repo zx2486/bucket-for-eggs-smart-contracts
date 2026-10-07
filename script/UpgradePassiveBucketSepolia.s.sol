@@ -11,12 +11,25 @@ import {PassiveBucket} from "../src/PassiveBucket.sol";
  *         UUPS proxy (PASSIVE_BUCKET_PROXY_ADDRESS) to point to it.
  * @dev No re-initialisation is required; upgradeToAndCall is called with empty data.
  *      The caller must be the owner of the proxy.
+ *
+ *      W3.3 (`09-DECISION-LOG.md` §10.1): as with ActiveBucket, `_authorizeUpgrade` now
+ *      requires a matching `queueUpgrade` entry, an elapsed 48h `upgradeEta()`, and a
+ *      still-live registry approval, re-checked at execution. This script assumes the proxy
+ *      owner has already queued this exact implementation address and that the window has
+ *      elapsed and approval still holds; otherwise `upgradeToAndCall` reverts
+ *      (`NoProposalPending` / `TimelockNotElapsed` / `UpgradeNotApproved`) by design.
  */
 contract UpgradePassiveBucketSepolia is Script {
+    // W3.3: must equal the registry the live proxy's implementation was deployed with.
+    address constant IMPLEMENTATION_REGISTRY = address(0); // TODO: Set deployed ImplementationRegistry address
+
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
         address proxyAddress = vm.envAddress("PASSIVE_BUCKET_PROXY_ADDRESS");
+
+        address registryAddr = vm.envOr("REGISTRY_ADDRESS", IMPLEMENTATION_REGISTRY);
+        require(registryAddr != address(0), "Set REGISTRY_ADDRESS env variable");
 
         require(proxyAddress != address(0), "PASSIVE_BUCKET_PROXY_ADDRESS not set");
 
@@ -42,7 +55,7 @@ contract UpgradePassiveBucketSepolia is Script {
 
         // Step 1: Deploy new implementation (constructor calls _disableInitializers)
         console.log("Step 1: Deploying new PassiveBucket implementation...");
-        PassiveBucket newImplementation = new PassiveBucket();
+        PassiveBucket newImplementation = new PassiveBucket(registryAddr);
         console.log("New implementation  :", address(newImplementation));
 
         // Step 2: Upgrade proxy to new implementation (no re-init needed)

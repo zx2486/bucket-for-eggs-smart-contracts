@@ -61,4 +61,25 @@ interface IBucketInfo {
     /// @notice Get the owner of the BucketInfo contract
     /// @return The owner address
     function owner() external view returns (address);
+
+    /// @notice W4.1 (D2, fail-closed compliance blacklist): whether `account` is blacklisted.
+    /// INV-7: pure storage read on the `BucketInfo` side -- no external call, no loop, no
+    /// oracle. Every token contract's transfer hook (W4.2) calls this through this interface on
+    /// every deposit/redeem/transfer, composed with each caller's own fail-closed handling of a
+    /// reverting/unreachable `BucketInfo` (D2: treated as blacklisted).
+    /// @param account The address to check.
+    /// @return True if `account` is currently blacklisted.
+    function isBlacklisted(address account) external view returns (bool);
+
+    /// @notice W5 (sc-oracle, returning): the Chainlink price feed configured for `token`, or
+    /// `address(0)` if `token` is manually priced (no Chainlink feed set). Already implemented
+    /// on the concrete contract at `BucketInfo.sol:567-569`; added to this shared interface so
+    /// `IBucketInfo`-typed callers (both vaults, and {OraclePricingLib}) can distinguish "manually
+    /// priced" (no feed at all) from "potentially outpriced" (a feed exists but is currently
+    /// stale/invalid) without depending on the concrete `BucketInfo` type. See
+    /// `04-CONTRACTS-IMPLEMENTATION-PLAN.md` §5.1 — the manual-price inventory view is a distinct
+    /// concept from {isPotentiallyOutpriced} and needs this getter, not that one.
+    /// @param token The token address
+    /// @return The Chainlink price feed address, or `address(0)` if manually priced.
+    function getPriceFeed(address token) external view returns (address);
 }

@@ -4,6 +4,9 @@ pragma solidity ^0.8.33;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {PureMembership} from "../src/PureMembership.sol";
+import {TimelockedAdmin} from "../src/libs/TimelockedAdmin.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
+import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -70,6 +73,30 @@ contract MockBucketInfoForMembership {
         operational = _operational;
     }
 
+    // --- W4.2b regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation -- PureMembership's own _update override (task #55) routes
+    // through the same _isBlacklistedFailClosed fail-closed helper, so this mock needed the
+    // identical fix. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     receive() external payable {}
 }
 
@@ -122,6 +149,10 @@ contract PureMembershipTest is Test {
     PureMembership public membership;
     MockBucketInfoForMembership public bucketInfo;
     MockERC20ForMembership public payToken;
+    // W3.3: platform-owned registry PureMembership's immutable constructor parameter now
+    // requires. Not exercised by most tests here -- deployed purely so
+    // `new PureMembership(address)` compiles; queue/cancel/authorize tests approve into it directly.
+    ImplementationRegistry public registry;
 
     address public owner;
     address public user1;
@@ -180,7 +211,13 @@ contract PureMembershipTest is Test {
         bucketInfo.addToken(address(0), ETH_PRICE);
         bucketInfo.addToken(address(payToken), PAY_TOKEN_PRICE);
 
-        implementation = new PureMembership();
+        registry = new ImplementationRegistry(owner);
+        implementation = new PureMembership(address(registry));
+        // Task #33 (W1.7 direct-proxy-bypass fix): this test suite deploys proxies directly
+        // (not through `PureMembershipFactory`), so the test contract itself must be an
+        // authorized "factory" from the registry's point of view, or every `initialize()` call
+        // below reverts with `UnauthorizedInitializer()`.
+        registry.setAuthorizedFactory(address(this), true);
 
         // Prepare membership configs
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
@@ -227,7 +264,7 @@ contract PureMembershipTest is Test {
     }
 
     function test_RevertInitializeZeroAddress() public {
-        PureMembership impl = new PureMembership();
+        PureMembership impl = new PureMembership(address(registry));
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
 
         vm.expectRevert(PureMembership.ZeroAddress.selector);
@@ -577,6 +614,20 @@ contract PureMembershipTest is Test {
         membership.pause();
     }
 
+    /// @dev Parity gap vs. `test/ActiveBucket.t.sol`'s `test_RevertUnpauseNotOwner` -- task #42
+    /// (W3.5). Unlike ActiveBucket/PassiveBucket, PureMembership has no accountability concept
+    /// at all (`grep -n "isBucketAccountable\|MIN_OWNER_BPS\|onlyAccountableOwner" src/PureMembership.sol`
+    /// returns zero hits) -- both `pause()` and `unpause()` are plain `onlyOwner` (`:554`, `:559`),
+    /// so the dilution-lockout scenario tested on the other two vaults does not apply here; this
+    /// closes only the not-owner-revert parity gap.
+    function test_RevertUnpauseNotOwner() public {
+        membership.pause();
+
+        vm.prank(user1);
+        vm.expectRevert();
+        membership.unpause();
+    }
+
     /*//////////////////////////////////////////////////////////////
                     UPDATE BUCKETINFO TESTS
     //////////////////////////////////////////////////////////////*/
@@ -592,11 +643,15 @@ contract PureMembershipTest is Test {
         // Set bucketInfo owner to owner (test contract)
         bucketInfo.setOwner(owner);
 
-        // Update BucketInfo - should only work from bucketInfo owner
-        vm.expectEmit(true, true, true, true);
-        emit BucketInfoUpdated(oldBucketInfo, address(newBucketInfo), owner);
+        // Propose is gated on the CURRENT BucketInfo's owner.
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
+        vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
 
-        membership.updateBucketInfo(address(newBucketInfo));
+        // Execute is permissionless once the delay has elapsed and no veto arrived.
+        vm.expectEmit(true, true, true, true);
+        emit BucketInfoUpdated(oldBucketInfo, address(newBucketInfo), address(this));
+
+        membership.executeUpdateBucketInfo();
 
         assertEq(address(membership.bucketInfo()), address(newBucketInfo));
     }
@@ -609,9 +664,13 @@ contract PureMembershipTest is Test {
         // Set bucketInfo owner to user1
         bucketInfo.setOwner(user1);
 
-        // user1 should be able to update
+        // user1 should be able to propose
         vm.prank(user1);
-        membership.updateBucketInfo(address(newBucketInfo));
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        // execute is permissionless -- anyone may apply it once the delay has elapsed
+        membership.executeUpdateBucketInfo();
 
         assertEq(address(membership.bucketInfo()), address(newBucketInfo));
     }
@@ -625,14 +684,58 @@ contract PureMembershipTest is Test {
         // user1 is not bucketInfo owner, should revert
         vm.prank(user1);
         vm.expectRevert(PureMembership.UnauthorizedBucketInfoUpdate.selector);
-        membership.updateBucketInfo(address(newBucketInfo));
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
     }
 
     function test_RevertUpdateBucketInfoZeroAddress() public {
         bucketInfo.setOwner(owner);
 
         vm.expectRevert(PureMembership.ZeroAddress.selector);
-        membership.updateBucketInfo(address(0));
+        membership.proposeUpdateBucketInfo(address(0));
+    }
+
+    function test_RevertExecuteUpdateBucketInfoBeforeTimelockElapsed() public {
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+        bucketInfo.setOwner(owner);
+
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        (, uint256 eta) = membership.pendingBucketInfoUpdate();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        membership.executeUpdateBucketInfo();
+    }
+
+    function test_RevertExecuteUpdateBucketInfoWithNothingPending() public {
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        membership.executeUpdateBucketInfo();
+    }
+
+    /// @notice D3's veto window: this contract's OWN owner may cancel a proposed repoint
+    /// before it executes.
+    function test_VetoUpdateBucketInfoByOwner() public {
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+        bucketInfo.setOwner(owner);
+
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.prank(owner); // membership.owner()
+        membership.vetoUpdateBucketInfo();
+
+        vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        membership.executeUpdateBucketInfo();
+
+        assertTrue(address(membership.bucketInfo()) != address(newBucketInfo));
+    }
+
+    function test_RevertVetoUpdateBucketInfoByNonOwner() public {
+        MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
+        bucketInfo.setOwner(owner);
+        membership.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.prank(user1); // user1 is not membership.owner()
+        vm.expectRevert(); // OwnableUpgradeable.OwnableUnauthorizedAccount
+        membership.vetoUpdateBucketInfo();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -838,5 +941,234 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         assertEq(membership.balanceOf(user1, BASIC_ID), 1);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3.3 (basic)
+    //////////////////////////////////////////////////////////////*/
+    // Basic happy-path/revert-path coverage for {queueUpgrade}/{cancelUpgrade}/{_authorizeUpgrade}
+    // per `09-DECISION-LOG.md` §10.1, mirroring ActiveBucket.t.sol/PassiveBucket.t.sol. This
+    // contract carries its OWN standalone copy of the errors (PureMembership.sol has no shared
+    // base to call into), so `PureMembership.UpgradeImplementationMismatch` /
+    // `PureMembership.UpgradeNotApproved`, not `BucketVaultBase`'s. The exhaustive adversarial
+    // suite (namespace isolation, factory-handover regression, renounceOwnership/Ownable2Step
+    // semantics) is task #45's own gate suite, not duplicated here.
+
+    function _deployApprovedPureMembershipImplementation() internal returns (address newImpl) {
+        newImpl = address(new PureMembership(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.PureMembership, newImpl);
+    }
+
+    function test_QueueUpgrade_SetsPendingAndEta() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+
+        membership.queueUpgrade(newImpl);
+
+        assertEq(membership.pendingImplementation(), newImpl);
+        assertEq(membership.upgradeEta(), block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+    }
+
+    function test_RevertQueueUpgradeNotOwner() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+
+        vm.prank(user1);
+        vm.expectRevert();
+        membership.queueUpgrade(newImpl);
+    }
+
+    function test_RevertQueueUpgradeZeroAddress() public {
+        vm.expectRevert(PureMembership.ZeroAddress.selector);
+        membership.queueUpgrade(address(0));
+    }
+
+    function test_UpgradeSucceeds_AfterQueueApprovalAndElapsedDelay() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+
+        membership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        membership.upgradeToAndCall(newImpl, "");
+
+        assertEq(membership.pendingImplementation(), address(0));
+        assertEq(membership.upgradeEta(), 0);
+    }
+
+    function test_RevertUpgrade_BeforeTimelockElapsed() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+        membership.queueUpgrade(newImpl);
+
+        uint256 eta = membership.upgradeEta();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NothingQueued() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_ImplementationMismatch() public {
+        address queuedImpl = _deployApprovedPureMembershipImplementation();
+        address otherImpl = _deployApprovedPureMembershipImplementation();
+
+        membership.queueUpgrade(queuedImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PureMembership.UpgradeImplementationMismatch.selector, queuedImpl, otherImpl)
+        );
+        membership.upgradeToAndCall(otherImpl, "");
+    }
+
+    /// @notice Registry approval is re-checked at EXECUTION time, not just at queue time — a
+    /// mid-window platform revocation actually blocks the upgrade (the plan's own "test 3",
+    /// 04 §5.6.1/§10.1). This is the scenario most likely to be omitted.
+    function test_RevertUpgrade_RegistryApprovalRevokedMidWindow() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+
+        membership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        registry.revoke(IImplementationRegistry.Kind.PureMembership, newImpl);
+
+        vm.expectRevert(abi.encodeWithSelector(PureMembership.UpgradeNotApproved.selector, newImpl));
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NeverApproved() public {
+        address newImpl = address(new PureMembership(address(registry)));
+
+        membership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(PureMembership.UpgradeNotApproved.selector, newImpl));
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_ClearsPendingState() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+        membership.queueUpgrade(newImpl);
+
+        membership.cancelUpgrade();
+
+        assertEq(membership.pendingImplementation(), address(0));
+        assertEq(membership.upgradeEta(), 0);
+
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_NoOpWhenNothingPending() public {
+        membership.cancelUpgrade();
+        assertEq(membership.pendingImplementation(), address(0));
+    }
+
+    function test_RevertCancelUpgradeNotOwner() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+        membership.queueUpgrade(newImpl);
+
+        vm.prank(user1);
+        vm.expectRevert();
+        membership.cancelUpgrade();
+    }
+
+    function test_RevertUpgrade_NotOwner() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+        membership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        vm.prank(user1);
+        vm.expectRevert();
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3 GATE (task #45)
+    //////////////////////////////////////////////////////////////*/
+    // Replicated from `ActiveBucket.t.sol`/`PassiveBucket.t.sol`'s equivalent block -- see
+    // ActiveBucket.t.sol's comment header for the full rationale (namespace isolation,
+    // platform-cannot-trigger, renounceOwnership/single-step-Ownable semantics, pause-during-
+    // queue independence). This contract carries its OWN standalone copy of the errors
+    // (PureMembership.sol has no shared base to call into) -- `PureMembership.
+    // RenounceOwnershipDisabled` / `PureMembership.UpgradeNotApproved`, not `BucketVaultBase`'s.
+    // Factory-handover regression (owner() == msg.sender inside the creation transaction) is
+    // already covered by `PureMembershipFactory.t.sol`'s `test_Create_OwnerIsCallerNotFactory` /
+    // `test_Create_OwnerIsNotFactory` -- not duplicated here.
+
+    function test_RevertRenounceOwnership() public {
+        vm.expectRevert(PureMembership.RenounceOwnershipDisabled.selector);
+        membership.renounceOwnership();
+    }
+
+    function test_TransferOwnershipIsSingleStepNotTwoStep() public {
+        membership.transferOwnership(user1);
+        assertEq(
+            membership.owner(),
+            user1,
+            "single-step Ownable must hand over ownership immediately, with no acceptOwnership() call"
+        );
+    }
+
+    function test_RevertUpgrade_PlatformCannotTrigger() public {
+        // Reconstruct the same membership configs setUp() builds locally (not stored state).
+        PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
+        configs[0] = PureMembership.MembershipConfig(BASIC_ID, BASIC_LEVEL, "Basic", BASIC_PRICE, BASIC_DURATION);
+        configs[1] =
+            PureMembership.MembershipConfig(PREMIUM_ID, PREMIUM_LEVEL, "Premium", PREMIUM_PRICE, PREMIUM_DURATION);
+        configs[2] = PureMembership.MembershipConfig(VIP_ID, VIP_LEVEL, "VIP", VIP_PRICE, VIP_DURATION);
+
+        bytes memory initData =
+            abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(bucketInfo), "");
+        // Task #33: this test deliberately simulates a customer deploying their own proxy
+        // directly (not through the factory) to get a vault the platform does not own. That is
+        // now exactly the shape the bypass fix blocks by default, so `user2` must be explicitly
+        // authorized here -- the point of this test is upgrade-authority, not the bypass itself.
+        registry.setAuthorizedFactory(user2, true);
+        vm.prank(user2);
+        ERC1967Proxy customerProxy = new ERC1967Proxy(address(implementation), initData);
+        PureMembership customerMembership = PureMembership(payable(address(customerProxy)));
+        assertEq(
+            customerMembership.owner(), user2, "customerMembership must be owned by the customer, not the platform"
+        );
+
+        address newImpl = address(new PureMembership(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.PureMembership, newImpl);
+
+        vm.expectRevert();
+        customerMembership.queueUpgrade(newImpl);
+
+        vm.prank(user2);
+        customerMembership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + customerMembership.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert();
+        customerMembership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_ApprovedForWrongKind() public {
+        address newImpl = address(new PureMembership(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
+
+        membership.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(PureMembership.UpgradeNotApproved.selector, newImpl));
+        membership.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_UpgradeQueued_PlatformPauseDoesNotBlockIt() public {
+        address newImpl = _deployApprovedPureMembershipImplementation();
+        membership.queueUpgrade(newImpl);
+
+        bucketInfo.setOperational(false);
+        assertFalse(bucketInfo.isPlatformOperational());
+
+        vm.warp(block.timestamp + membership.UPGRADE_TIMELOCK_DELAY());
+
+        membership.upgradeToAndCall(newImpl, "");
+        assertEq(membership.pendingImplementation(), address(0));
     }
 }

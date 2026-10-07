@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {PassiveBucketFactory} from "../src/PassiveBucketFactory.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -62,6 +63,28 @@ contract MockBucketInfoForPBFactory {
         operational = _operational;
     }
 
+    // --- W4.2a regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     receive() external payable {}
 }
 
@@ -113,6 +136,10 @@ contract PassiveBucketFactoryTest is Test {
     PassiveBucket public implementation;
     PassiveBucketFactory public factory;
     MockBucketInfoForPBFactory public bucketInfo;
+    // W3.3: platform-owned registry ActiveBucket/PassiveBucket/PureMembership's immutable
+    // constructor parameter now requires. Not exercised by these factory tests -- deployed
+    // purely so `new PassiveBucket(address)` compiles.
+    ImplementationRegistry public registry;
     MockERC20ForPBFactory public tokenA;
     MockERC20ForPBFactory public tokenB;
 
@@ -162,8 +189,12 @@ contract PassiveBucketFactoryTest is Test {
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
-        implementation = new PassiveBucket();
+        registry = new ImplementationRegistry(deployer);
+        implementation = new PassiveBucket(address(registry));
         factory = new PassiveBucketFactory(address(implementation), address(bucketInfo));
+        // Task #33 (W1.7 direct-proxy-bypass fix): see ActiveBucketFactory.t.sol's identical
+        // comment -- `msg.sender` inside `initialize()` is `factory`, not the external caller.
+        registry.setAuthorizedFactory(address(factory), true);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -415,6 +446,7 @@ contract PassiveBucketFactoryTest is Test {
         bucketInfo2.addToken(address(tokenB), TOKEN_B_PRICE);
 
         PassiveBucketFactory factory2 = new PassiveBucketFactory(address(implementation), address(bucketInfo2));
+        registry.setAuthorizedFactory(address(factory2), true);
 
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
 

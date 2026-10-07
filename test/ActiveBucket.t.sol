@@ -8,6 +8,9 @@ import {ActiveBucket} from "../src/ActiveBucket.sol";
 import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
 import {IFlashLoanReceiver} from "../src/interfaces/IFlashLoanReceiver.sol";
 import {IBucketInfo} from "../src/interfaces/IBucketInfo.sol";
+import {TimelockedAdmin} from "../src/libs/TimelockedAdmin.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
+import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -91,6 +94,31 @@ contract MockBucketInfoForActive {
                 break;
             }
         }
+    }
+
+    // --- W4.2a regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation -- this mock predates the blacklist hook and lacked
+    // `isBlacklisted`, so the fail-closed try/catch in _isBlacklistedFailClosed blocked every
+    // mint/burn/transfer. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation -- this mock
+    // predates {OraclePricingLib}'s wiring and lacked `isPotentiallyOutpriced`/`getPriceFeed`.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
     }
 
     receive() external payable {}
@@ -181,6 +209,10 @@ contract ActiveBucketTest is Test {
     MockERC20ForActive public tokenA;
     MockERC20ForActive public tokenB;
     address public oneInchRouter;
+    // W3.3: platform-owned registry ActiveBucket's immutable constructor parameter now
+    // requires. Not exercised by most tests here -- deployed purely so
+    // `new ActiveBucket(address)` compiles; queue/cancel/authorize tests approve into it directly.
+    ImplementationRegistry public registry;
 
     address public owner;
     address public user1;
@@ -207,7 +239,13 @@ contract ActiveBucketTest is Test {
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
-        implementation = new ActiveBucket();
+        registry = new ImplementationRegistry(owner);
+        implementation = new ActiveBucket(address(registry));
+        // Task #33 (W1.7 direct-proxy-bypass fix): this test suite deploys proxies directly
+        // (not through `ActiveBucketFactory`), so the test contract itself must be an
+        // authorized "factory" from the registry's point of view, or every `initialize()` call
+        // below reverts with `UnauthorizedInitializer()`.
+        registry.setAuthorizedFactory(address(this), true);
 
         bytes memory initData =
             abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, NAME, SYMBOL);
@@ -237,7 +275,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertInitializeZeroBucketInfo() public {
-        ActiveBucket impl = new ActiveBucket();
+        ActiveBucket impl = new ActiveBucket(address(registry));
 
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bytes memory initData =
@@ -246,7 +284,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertInitializeZeroOneInch() public {
-        ActiveBucket impl = new ActiveBucket();
+        ActiveBucket impl = new ActiveBucket(address(registry));
 
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bytes memory initData =
@@ -260,7 +298,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_InitializeCustomNameAndSymbol() public {
-        ActiveBucket impl = new ActiveBucket();
+        ActiveBucket impl = new ActiveBucket(address(registry));
         bytes memory initData = abi.encodeWithSelector(
             ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, "My Active Bucket", "MAB"
         );
@@ -636,6 +674,12 @@ contract ActiveBucketTest is Test {
 
         uint256 bucketBalBefore = tokenA.balanceOf(address(bucket));
 
+        // W5.3 (SC-10, B6): flashLoan is holder-gated (`_requireHasShares()`), not
+        // owner-gated. user1 is the depositor and therefore the shareholder entitled to call
+        // -- without this prank the call would be made by `owner`/address(this), who holds
+        // zero shares here, and would revert InsufficientShares() before ever reaching the
+        // logic this test means to exercise.
+        vm.prank(user1);
         bucket.flashLoan(address(tokenA), loanAmount, address(receiver), bytes(""));
 
         uint256 bucketBalAfter = tokenA.balanceOf(address(bucket));
@@ -655,6 +699,9 @@ contract ActiveBucketTest is Test {
 
         uint256 bucketBalBefore = address(bucket).balance;
 
+        // W5.3 (SC-10, B6): caller must be the shareholder (user1), see comment in
+        // test_FlashLoanERC20 above.
+        vm.prank(user1);
         bucket.flashLoan(address(0), loanAmount, address(receiver), bytes(""));
 
         uint256 bucketBalAfter = address(bucket).balance;
@@ -671,8 +718,11 @@ contract ActiveBucketTest is Test {
         uint256 loanAmount = 5 ether;
         uint256 expectedFee = (loanAmount * 200) / 10000;
 
+        // W5.3 (SC-10, B6): the caller (and therefore the event's `initiator`) is now user1,
+        // the shareholder, not `address(this)`.
         vm.expectEmit(true, true, true, true);
-        emit ActiveBucket.FlashLoan(address(this), address(receiver), address(0), loanAmount, expectedFee);
+        emit ActiveBucket.FlashLoan(user1, address(receiver), address(0), loanAmount, expectedFee);
+        vm.prank(user1);
         bucket.flashLoan(address(0), loanAmount, address(receiver), bytes(""));
     }
 
@@ -683,22 +733,38 @@ contract ActiveBucketTest is Test {
         BadFlashLoanReceiver badReceiver = new BadFlashLoanReceiver();
         vm.deal(address(badReceiver), 1 ether);
 
+        // W5.3 (SC-10, B6): caller must be the shareholder (user1) so the revert below is
+        // actually InsufficientRepayment, not a false-positive InsufficientShares from a
+        // zero-share default caller.
+        vm.prank(user1);
         vm.expectRevert();
         bucket.flashLoan(address(0), 5 ether, address(badReceiver), bytes(""));
     }
 
-    function test_RevertFlashLoanNotOwner() public {
+    function test_RevertFlashLoanNonHolderRejected() public {
+        // W5.3 (SC-10, B6): this test used to be `test_RevertFlashLoanNotOwner`, asserting a
+        // non-owner DEPOSITOR (user1) was rejected -- that is exactly backwards now that
+        // flashLoan is holder-gated rather than owner-gated: a depositing shareholder is
+        // precisely who should be allowed to call. Repurposed to assert a genuine NON-HOLDER
+        // (user2, who never deposited and holds zero shares) is rejected with
+        // InsufficientShares(), which is the actual guarantee B6 requires.
         vm.prank(user1);
         bucket.deposit{value: 10 ether}(address(0), 0);
 
         MockFlashLoanReceiver receiver = new MockFlashLoanReceiver();
 
-        vm.prank(user1);
-        vm.expectRevert();
+        vm.prank(user2);
+        vm.expectRevert(BucketVaultBase.InsufficientShares.selector);
         bucket.flashLoan(address(0), 1 ether, address(receiver), bytes(""));
     }
 
     function test_RevertFlashLoanZeroAmount() public {
+        // W5.3 (SC-10, B6): `_requireHasShares()` now runs first in the function body, so the
+        // caller must hold shares before the ZeroAmount check (which runs after it) can ever
+        // be reached. `owner` deposits here and calls with the default (unpranked) sender, who
+        // is `owner`/address(this).
+        bucket.deposit{value: 1 ether}(address(0), 0);
+
         MockFlashLoanReceiver receiver = new MockFlashLoanReceiver();
 
         vm.expectRevert(BucketVaultBase.ZeroAmount.selector);
@@ -709,15 +775,22 @@ contract ActiveBucketTest is Test {
         vm.prank(user1);
         bucket.deposit{value: 10 ether}(address(0), 0);
 
+        // W5.3 (SC-10, B6): caller must be the shareholder (user1).
+        vm.prank(user1);
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bucket.flashLoan(address(0), 1 ether, address(0), bytes(""));
     }
 
     function test_RevertFlashLoanInsufficientBalance() public {
+        // W5.3 (SC-10, B6): caller must hold shares to clear `_requireHasShares()` before
+        // reaching the InsufficientBalance check. `owner` deposits a small amount, then
+        // requests a loan larger than the bucket's actual balance.
+        bucket.deposit{value: 1 ether}(address(0), 0);
+
         MockFlashLoanReceiver receiver = new MockFlashLoanReceiver();
 
         vm.expectRevert(ActiveBucket.InsufficientBalance.selector);
-        bucket.flashLoan(address(0), 1 ether, address(receiver), bytes(""));
+        bucket.flashLoan(address(0), 2 ether, address(receiver), bytes(""));
     }
 
     function test_RevertFlashLoanPlatformDown() public {
@@ -773,6 +846,31 @@ contract ActiveBucketTest is Test {
         vm.prank(user1);
         vm.expectRevert();
         bucket.unpause();
+    }
+
+    /// @dev W3.5 design rationale (`04-CONTRACTS-IMPLEMENTATION-PLAN.md`, review reply §4.5(4)):
+    /// `unpause()` is deliberately plain `onlyOwner`, NOT `onlyAccountableOwner`. This proves the
+    /// failure mode the design guards against: an owner who WAS accountable at pause time can
+    /// fall below `MIN_OWNER_BPS` while the vault sits paused -- here via plain ERC20 `transfer`,
+    /// which is not `whenNotPaused`-gated (only deposit/redeem/rebalance are) -- and `unpause()`
+    /// must still succeed. If it required accountability too, the vault would be PERMANENTLY
+    /// stuck paused: deposit/redeem are `whenNotPaused`, so there is no path back to
+    /// accountability once paused and diluted.
+    function test_UnpauseSucceedsWhenOwnerNotAccountable() public {
+        bucket.deposit{value: 1 ether}(address(0), 0);
+        assertTrue(bucket.isBucketAccountable());
+
+        bucket.pause();
+        assertTrue(bucket.paused());
+
+        // Dilute the owner below MIN_OWNER_BPS while paused, via plain ERC20 transfer -- leave
+        // the owner ~0.1% of supply, well under the 1% floor (`MIN_OWNER_BPS() == 100`).
+        uint256 ownerShares = bucket.balanceOf(address(this));
+        bucket.transfer(user1, ownerShares - (ownerShares / 1000));
+        assertFalse(bucket.isBucketAccountable());
+
+        bucket.unpause();
+        assertFalse(bucket.paused());
     }
 
     function test_RevertPauseSwapNotOwner() public {
@@ -955,11 +1053,15 @@ contract ActiveBucketTest is Test {
 
         // W2 (sc-vault-entry): owner is the FIRST depositor, so `DEAD_SHARES` (INV-6) is carved
         // out of the owner's own mint (see BucketVaultBase.DEAD_SHARES). This test used to size
-        // user1's deposit at exactly the 5% boundary (19x owner's stake gives owner precisely
-        // 2000/40000 = 5.00% pre-mitigation); post-mitigation the owner's net shares are
-        // 1999e18, not 2000e18, which would put the owner just BELOW 5% at that exact ratio.
-        // Sized down to 18x here so the owner clears MIN_OWNER_BPS with comfortable margin
-        // (~5.26%) rather than sitting exactly on the boundary the mitigation now shifts.
+        // user1's deposit at exactly the 5% boundary back when `MIN_OWNER_BPS` was 500 (19x
+        // owner's stake gives owner precisely 2000/40000 = 5.00% pre-mitigation, 1999e18 /
+        // 4.9975% post-mitigation). ⚠ `MIN_OWNER_BPS` was reversed to 100 (1%) by direct
+        // instruction 2026-09-30 (see BucketVaultBase.sol:194's doc comment) -- this test's
+        // ~5.26% owner share is now comfortably above the LIVE 1% boundary, not a near-boundary
+        // case for it. Left at this sizing (still a valid, passing "holds well above minimum"
+        // case) rather than re-tuned to the new boundary, since re-tuning was out of the scope of
+        // the instruction that triggered this comment update; a tighter near-1%-boundary test
+        // would need its own deposit-sizing math redone from scratch.
         vm.prank(user1);
         bucket.deposit{value: 18 ether}(address(0), 0);
 
@@ -970,7 +1072,8 @@ contract ActiveBucketTest is Test {
         // Owner deposits
         bucket.deposit{value: 0.04 ether}(address(0), 0);
 
-        // User deposits way more (owner will hold < 5%)
+        // User deposits way more (owner will hold < 1%, well under either the old 5% or the
+        // current 1% MIN_OWNER_BPS boundary -- ~0.4%)
         vm.prank(user1);
         bucket.deposit{value: 10 ether}(address(0), 0);
 
@@ -1013,7 +1116,7 @@ contract ActiveBucketTest is Test {
         assertEq(bucket.BPS_DENOMINATOR(), 10000);
         assertEq(bucket.MAX_VALUE_LOSS_BPS(), 50);
         assertEq(bucket.FLASH_LOAN_FEE_BPS(), 200);
-        assertEq(bucket.MIN_OWNER_BPS(), 500);
+        assertEq(bucket.MIN_OWNER_BPS(), 100);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1121,7 +1224,9 @@ contract ActiveBucketTest is Test {
         newBucketInfo.addToken(address(0), ETH_PRICE);
 
         // Owner of current bucketInfo is this contract (deployed in setUp)
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        bucket.executeUpdateBucketInfo();
 
         assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
     }
@@ -1133,9 +1238,14 @@ contract ActiveBucketTest is Test {
         MockBucketInfoForActive newBucketInfo = new MockBucketInfoForActive();
         newBucketInfo.addToken(address(0), ETH_PRICE);
 
-        // user1 (the BucketInfo owner) can update
+        // user1 (the BucketInfo owner) can propose
         vm.prank(user1);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+
+        // execute is permissionless -- anyone, not just user1 or the vault owner, may apply it
+        bucket.executeUpdateBucketInfo();
 
         assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
     }
@@ -1146,12 +1256,56 @@ contract ActiveBucketTest is Test {
         // user1 is NOT the BucketInfo owner
         vm.prank(user1);
         vm.expectRevert(BucketVaultBase.UnauthorizedBucketInfoUpdate.selector);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
     }
 
     function test_RevertUpdateBucketInfoZeroAddress() public {
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
-        bucket.updateBucketInfo(address(0));
+        bucket.proposeUpdateBucketInfo(address(0));
+    }
+
+    function test_RevertExecuteUpdateBucketInfoBeforeTimelockElapsed() public {
+        MockBucketInfoForActive newBucketInfo = new MockBucketInfoForActive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        (, uint256 eta) = bucket.pendingBucketInfoUpdate();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        bucket.executeUpdateBucketInfo();
+    }
+
+    function test_RevertExecuteUpdateBucketInfoWithNothingPending() public {
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.executeUpdateBucketInfo();
+    }
+
+    /// @notice D3's veto window: the vault's OWN owner (not the BucketInfo owner, not a
+    /// third party) may cancel a proposed repoint before it executes.
+    function test_VetoUpdateBucketInfoByVaultOwner() public {
+        MockBucketInfoForActive newBucketInfo = new MockBucketInfoForActive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+        // bucket.owner() is this test contract (deployed in setUp), matching how propose was
+        // called above with no vm.prank.
+        bucket.vetoUpdateBucketInfo();
+
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.executeUpdateBucketInfo();
+
+        // The old BucketInfo is still in place -- the veto stopped the repoint.
+        assertTrue(address(bucket.bucketInfo()) != address(newBucketInfo));
+    }
+
+    function test_RevertVetoUpdateBucketInfoByNonVaultOwner() public {
+        MockBucketInfoForActive newBucketInfo = new MockBucketInfoForActive();
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.prank(user1); // user1 is not bucket.owner()
+        vm.expectRevert(); // OwnableUpgradeable.OwnableUnauthorizedAccount
+        bucket.vetoUpdateBucketInfo();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1327,5 +1481,274 @@ contract ActiveBucketTest is Test {
         uint256 expectedPrice = (totalValue * 1e18) / supply;
 
         assertEq(bucket.sharePrice(), expectedPrice, "sharePrice() must match the live NAV formula post-deposit");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3.3 (basic)
+    //////////////////////////////////////////////////////////////*/
+    // Basic happy-path/revert-path coverage for {queueUpgrade}/{cancelUpgrade}/{_authorizeUpgrade}
+    // per `09-DECISION-LOG.md` §10.1. The exhaustive adversarial suite (namespace isolation,
+    // factory-handover regression, renounceOwnership/Ownable2Step semantics, pause-during-queue)
+    // is task #45's own gate suite, not duplicated here.
+
+    function _deployApprovedActiveBucketImplementation() internal returns (address newImpl) {
+        newImpl = address(new ActiveBucket(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
+    }
+
+    function test_QueueUpgrade_SetsPendingAndEta() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+
+        assertEq(bucket.pendingImplementation(), newImpl);
+        assertEq(bucket.upgradeEta(), block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+    }
+
+    function test_RevertQueueUpgradeNotOwner() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.queueUpgrade(newImpl);
+    }
+
+    function test_RevertQueueUpgradeZeroAddress() public {
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
+        bucket.queueUpgrade(address(0));
+    }
+
+    function test_UpgradeSucceeds_AfterQueueApprovalAndElapsedDelay() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        bucket.upgradeToAndCall(newImpl, "");
+
+        // Successful execution clears the pending slot (TimelockedAdmin.execute deletes it).
+        assertEq(bucket.pendingImplementation(), address(0));
+        assertEq(bucket.upgradeEta(), 0);
+    }
+
+    function test_RevertUpgrade_BeforeTimelockElapsed() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        uint256 eta = bucket.upgradeEta();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NothingQueued() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_ImplementationMismatch() public {
+        address queuedImpl = _deployApprovedActiveBucketImplementation();
+        address otherImpl = _deployApprovedActiveBucketImplementation();
+
+        bucket.queueUpgrade(queuedImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(
+            abi.encodeWithSelector(BucketVaultBase.UpgradeImplementationMismatch.selector, queuedImpl, otherImpl)
+        );
+        bucket.upgradeToAndCall(otherImpl, "");
+    }
+
+    /// @notice Registry approval is re-checked at EXECUTION time, not just at queue time — a
+    /// mid-window platform revocation actually blocks the upgrade (the plan's own "test 3",
+    /// 04 §5.6.1/§10.1). This is the scenario most likely to be omitted.
+    function test_RevertUpgrade_RegistryApprovalRevokedMidWindow() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        registry.revoke(IImplementationRegistry.Kind.ActiveBucket, newImpl);
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NeverApproved() public {
+        // Deployed but never approved in the registry -- distinct from the revoked-mid-window
+        // case above (never-approved vs. approved-then-revoked), same revert reason.
+        address newImpl = address(new ActiveBucket(address(registry)));
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_ClearsPendingState() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        bucket.cancelUpgrade();
+
+        assertEq(bucket.pendingImplementation(), address(0));
+        assertEq(bucket.upgradeEta(), 0);
+
+        // A cancelled entry cannot later be executed, even after what would have been the delay.
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_NoOpWhenNothingPending() public {
+        // Matches TimelockedAdmin.cancel's own semantics: does not revert.
+        bucket.cancelUpgrade();
+        assertEq(bucket.pendingImplementation(), address(0));
+    }
+
+    function test_RevertCancelUpgradeNotOwner() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.cancelUpgrade();
+    }
+
+    function test_RevertUpgrade_NotOwner() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3 GATE (task #45)
+    //////////////////////////////////////////////////////////////*/
+    // The exhaustive adversarial suite promised by the comment above the basic-coverage section:
+    // namespace isolation, platform-cannot-trigger, renounceOwnership/single-step-Ownable
+    // semantics, and pause-during-queue independence. Factory-handover regression (owner() ==
+    // msg.sender inside the creation transaction) is already covered by
+    // `ActiveBucketFactory.t.sol`'s `test_Create_OwnerIsCallerNotFactory` /
+    // `test_Create_OwnerIsNotFactory` — not duplicated here.
+
+    /// @dev Task #45 discovery: `renounceOwnership()` had NO override anywhere in this vault's
+    /// inheritance chain before this fix (`grep -rni "renounce" src/ActiveBucket.sol
+    /// src/base/BucketVaultBase.sol` returned zero hits) -- unlike `BucketInfo.sol:716` and
+    /// `ImplementationRegistry.sol:94`, which both correctly disable it. `OwnableUpgradeable`'s
+    /// default `renounceOwnership()` SUCCEEDS, so this vault could have been permanently bricked
+    /// (no owner, therefore no `pause`/`queueUpgrade`/`updateBucketInfo`/... ever again, and no
+    /// DAO to hand it to per Q14.2). PROVEN TO CATCH THIS REGRESSION (manual verification, see
+    /// W3-GATE-REPORT for the transcript): this test was run against `BucketVaultBase.sol` with
+    /// its new `renounceOwnership` override temporarily commented back out, confirmed to FAIL
+    /// with "call did not revert as expected", then the override was restored and this test
+    /// confirmed passing again.
+    function test_RevertRenounceOwnership() public {
+        vm.expectRevert(BucketVaultBase.RenounceOwnershipDisabled.selector);
+        bucket.renounceOwnership();
+    }
+
+    /// @dev D-3 (root CLAUDE.md §8): vaults stay single-step `Ownable`, NEVER `Ownable2Step` —
+    /// unlike `BucketInfo`/`ImplementationRegistry` (the only two two-step contracts in this
+    /// system). Proves ownership transfers immediately on `transferOwnership`, with no
+    /// intervening `acceptOwnership()` call and no `pendingOwner()` step to satisfy first — the
+    /// exact property that would break if `Ownable2Step` were ever (wrongly) applied here.
+    function test_TransferOwnershipIsSingleStepNotTwoStep() public {
+        bucket.transferOwnership(user1);
+        assertEq(
+            bucket.owner(),
+            user1,
+            "single-step Ownable must hand over ownership immediately, with no acceptOwnership() call"
+        );
+    }
+
+    /// @dev Sharpens sub-item (4) of task #45's five authorisation tests ("non-owner (incl.
+    /// platform) cannot trigger"). A generic `user1` (`test_RevertUpgrade_NotOwner` above) proves
+    /// nothing about the platform specifically, because throughout this file the platform
+    /// (`registry`'s owner) and the vault owner are the SAME address (`address(this)`). This test
+    /// gives the platform a genuinely distinct identity: it approves an implementation via the
+    /// registry it owns, then tries to queue/execute the upgrade on a DIFFERENT vault it does not
+    /// own — proving registry-approval power grants no trigger power (root CLAUDE.md §8: "the
+    /// platform cannot push a fix into a vault").
+    function test_RevertUpgrade_PlatformCannotTrigger() public {
+        bytes memory initData =
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, NAME, SYMBOL);
+        // Task #33: this test deliberately simulates a customer deploying their own proxy
+        // directly (not through the factory) to get a vault the platform does not own. That is
+        // now exactly the shape the bypass fix blocks by default, so `user2` must be explicitly
+        // authorized here -- the point of this test is upgrade-authority, not the bypass itself.
+        registry.setAuthorizedFactory(user2, true);
+        vm.prank(user2);
+        ERC1967Proxy customerProxy = new ERC1967Proxy(address(implementation), initData);
+        ActiveBucket customerBucket = ActiveBucket(payable(address(customerProxy)));
+        assertEq(customerBucket.owner(), user2, "customerBucket must be owned by the customer, not the platform");
+
+        address newImpl = address(new ActiveBucket(address(registry)));
+        // Platform (`address(this)`, owner of `registry`) approves the implementation -- this
+        // succeeds, since approving is exactly the platform's job.
+        registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
+
+        // The platform is NOT customerBucket's owner, so it cannot even queue the upgrade it just
+        // approved:
+        vm.expectRevert();
+        customerBucket.queueUpgrade(newImpl);
+
+        // Nor can it execute one queued by the actual owner:
+        vm.prank(user2);
+        customerBucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + customerBucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert();
+        customerBucket.upgradeToAndCall(newImpl, "");
+    }
+
+    /// @dev Confirmed gap (task #45 inventory): no existing test approves an implementation for
+    /// the WRONG `Kind` and then attempts to install it on a vault of the RIGHT kind -- the
+    /// vault-level instance of `ImplementationRegistry`'s namespace isolation
+    /// (`IImplementationRegistry.sol`'s own doc comment: "an implementation approved for one kind
+    /// must never read as approved for another"). PROVEN TO CATCH A REGRESSION (manual
+    /// verification, see W3-GATE-REPORT): `_authorizeUpgradeCommon`'s
+    /// `_registry().isApproved(_registryKind(), newImplementation)` check was temporarily changed
+    /// to query `Kind.PassiveBucket` unconditionally; this test was confirmed to FAIL (the
+    /// wrongly-approved upgrade succeeded); the change was reverted and this test reconfirmed
+    /// passing.
+    function test_RevertUpgrade_ApprovedForWrongKind() public {
+        address newImpl = address(new ActiveBucket(address(registry)));
+        // Approved for PassiveBucket's namespace, NOT ActiveBucket's -- `bucket` is an
+        // ActiveBucket.
+        registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    /// @dev Confirmed gap: no test proves the platform's kill switch (`BucketInfo.pausePlatform`,
+    /// modelled here via the mock's `setOperational(false)`) is independent of a vault's upgrade
+    /// timelock -- neither blocks the other. `queueUpgrade`/`cancelUpgrade`/
+    /// `_authorizeUpgradeCommon` carry no `whenPlatformOperational` modifier (confirmed absent
+    /// from all three in `BucketVaultBase.sol`), so a customer's already-queued upgrade must
+    /// remain executable even while the platform is paused -- pausing is a deposit/redeem/swap
+    /// guard (root CLAUDE.md's kill-switch description, 01:42), never an upgrade gate.
+    function test_UpgradeQueued_PlatformPauseDoesNotBlockIt() public {
+        address newImpl = _deployApprovedActiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        // Platform pause succeeds regardless of the pending upgrade.
+        bucketInfo.setOperational(false);
+        assertFalse(bucketInfo.isPlatformOperational());
+
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        // The queued upgrade still executes even though the platform is paused.
+        bucket.upgradeToAndCall(newImpl, "");
+        assertEq(bucket.pendingImplementation(), address(0));
     }
 }

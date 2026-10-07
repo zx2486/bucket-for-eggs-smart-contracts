@@ -6,13 +6,16 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {IBucketInfo} from "./interfaces/IBucketInfo.sol";
 import {IFlashLoanReceiver} from "./interfaces/IFlashLoanReceiver.sol";
+import {IImplementationRegistry} from "./interfaces/IImplementationRegistry.sol";
 import {BucketVaultBase} from "./base/BucketVaultBase.sol";
 
 /**
  * @title ActiveBucket
  * @author Bucket-for-Eggs Team
  * @notice Upgradeable ERC-20 vault without predefined distributions. The owner has full
- * control over portfolio composition via swapBy1inch and flashLoan functions.
+ * control over portfolio composition via swapBy1inch. flashLoan is holder-callable (W5.3,
+ * SC-10, B6) -- any address holding a nonzero share balance may call it, not just the owner;
+ * see the function's own doc comment for why.
  * Users deposit tokens to receive shares and redeem shares to receive proportional tokens.
  * @dev Uses UUPS proxy pattern. Similar to PassiveBucket but without bucket distributions,
  * accountability requirements, or DefiSwap rebalancing.
@@ -62,6 +65,13 @@ contract ActiveBucket is BucketVaultBase {
     /// @notice Performance fee in basis points
     uint256 public performanceFeeBps;
 
+    /// @notice The platform-owned {ImplementationRegistry} this vault's upgrades are checked
+    /// against. W3.3 (`09-DECISION-LOG.md` §10.1): `immutable`, constructor-set, never
+    /// repointable — the whitelist authority itself must not be swappable by this vault's
+    /// (customer) owner, mirroring why {bucketInfo}'s repoint path (above) requires the CURRENT
+    /// BucketInfo owner's sign-off, not this vault owner's alone.
+    IImplementationRegistry public immutable REGISTRY;
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -103,7 +113,14 @@ contract ActiveBucket is BucketVaultBase {
     //////////////////////////////////////////////////////////////*/
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
+    /// implementations against. W3.3: baked in as an immutable constructor parameter, never
+    /// threaded through `initialize`, following the same "factory-immutable" precedent as
+    /// {implementation}/{bucketInfo} on the factory itself (root CLAUDE.md §1.1, W1.7) — so the
+    /// factory needs zero changes to supply it (`09-DECISION-LOG.md` §11.2 / D-3).
+    constructor(address registry_) {
+        if (registry_ == address(0)) revert ZeroAddress();
+        REGISTRY = IImplementationRegistry(registry_);
         _disableInitializers();
     }
 
@@ -120,6 +137,11 @@ contract ActiveBucket is BucketVaultBase {
         external
         initializer
     {
+        // Task #33 (W1.7 direct-proxy-bypass fix): only a platform-authorized factory may
+        // initialize a proxy against this implementation. Without this, anyone can deploy their
+        // own `ERC1967Proxy(implementation, ...)` and call `initialize()` directly, supplying an
+        // attacker-owned `bucketInfoAddr` and bypassing `ActiveBucketFactory` entirely.
+        if (!REGISTRY.isAuthorizedFactory(msg.sender)) revert UnauthorizedInitializer();
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
         if (oneInchRouterAddr == address(0)) revert ZeroAddress();
 
@@ -208,16 +230,11 @@ contract ActiveBucket is BucketVaultBase {
         // Burn shares
         _burn(msg.sender, shares);
 
-        // Transfer tokens
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (returnAmounts[i] > 0) {
-                _transferToken(tokens[i], msg.sender, returnAmounts[i]);
-                // Keep the held-tokens registry accurate if this payout fully drains a token —
-                // mirrors the sync PassiveBucket's swap paths already perform post-swap.
-                _syncHeldTokenByBalance(tokens[i]);
-                emit TokenReturned(msg.sender, tokens[i], returnAmounts[i]);
-            }
-        }
+        // Transfer tokens (interactions) — W5 (sc-oracle, size relief): delegates to
+        // {PayoutLib} via {BucketVaultBase._payoutAndSync} instead of an inline loop; see that
+        // library's header comment. Pure bytecode relocation — same transfer, registry-sync and
+        // `TokenReturned` emission as before, per nonzero payout amount.
+        _payoutAndSync(msg.sender, tokens, returnAmounts);
 
         // W2 (sc-vault-exit): `Redeemed` redesigned (BucketVaultBase.sol doc comment) — USD
         // value is no longer computed on-chain here (that required the oracle call INV-1
@@ -225,6 +242,10 @@ contract ActiveBucket is BucketVaultBase {
         // per root CLAUDE.md §8. The event carries token amounts so an off-chain indexer can
         // reconstruct the same statistic from its own price history.
         emit Redeemed(msg.sender, shares, totalSupply(), tokens, returnAmounts);
+
+        // W5 (sc-oracle, returning): once per state-changing function, after the per-token
+        // payout loop above completes -- never inside it, or this becomes O(n^2).
+        _syncOutpricedStatus();
     }
 
     /**
@@ -265,6 +286,12 @@ contract ActiveBucket is BucketVaultBase {
         whenSwapNotPaused
         whenPlatformOperational
     {
+        // W4.2c: this path mints/burns no shares, so BucketVaultBase's `_update` hook never
+        // fires for it -- explicit check required. `onlyOwner` above already guarantees
+        // `msg.sender == owner()`, so checking either is equivalent; `msg.sender` is used to
+        // match the pattern used at every other entry point in this contract.
+        _assertNotBlacklisted(msg.sender);
+
         uint256 beforeTokenPrice = tokenPrice;
 
         // Mechanical call-and-value-loss-check is shared (BucketVaultBase._execute1inchSwap);
@@ -278,6 +305,10 @@ contract ActiveBucket is BucketVaultBase {
         // some `srcToken` down to zero, and the registry (consumed by redeem()'s payout token
         // list) must reflect that.
         _syncAllHeldTokensFromWhitelist();
+
+        // W5 (sc-oracle, returning): once per state-changing function, after the resync above
+        // completes.
+        _syncOutpricedStatus();
 
         // Send performance fee to BucketInfo and owner
         uint256 tokenTotalSupply = totalSupply();
@@ -293,7 +324,26 @@ contract ActiveBucket is BucketVaultBase {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Flash loan any token held by the contract (owner only, 2% interest)
+     * @notice Flash loan any token held by the contract (holder-callable, 2% interest)
+     * @dev W5.3 (SC-10, B6): previously `onlyOwner` -- confirmed stale/not-intended by the
+     * client (`09-DECISION-LOG.md` §8.1 item 6: "flashloan becomes holder-callable;
+     * `ActiveBucket.sol:317-320`'s `onlyOwner` is confirmed stale, not intended"). Gated instead
+     * on holding a nonzero share balance, mirroring `PassiveBucket`'s own holder-gated pattern
+     * (`_requireHasShares()` there; the identical check is duplicated here rather than hoisted
+     * to {BucketVaultBase}, per the same in-contract-dedup reasoning `PassiveBucket.sol:699-704`
+     * gives for not doing so across files). This is a strictly WIDER caller set than before
+     * (owner is still a holder and can still call it) -- no existing caller loses access.
+     * Interface kept exactly as the project's existing bespoke `IFlashLoanReceiver.onFlashLoan`
+     * (initiator, token, amount, fee, data; no return value) rather than adopting
+     * OZ's full IERC3156FlashLender/FlashBorrower -- the brief only asked this stay
+     * "ERC-3156-shaped" (fee-bearing, same-tx strict repayment, reentrancy-guarded against
+     * deposit/redeem, all of which this already is), not that it match ERC-3156's calldata
+     * surface byte-for-byte, and introducing a second interface shape here would be new
+     * surface area the brief did not ask for. Flagged as a documented interpretive decision
+     * for the W5 report (root CLAUDE.md hard rule 5).
+     * Reentrancy: `nonReentrant` here shares the same lock as `deposit`/`redeem`/`redeemForStable`
+     * (all declared on {BucketVaultBase}), so a receiver's callback cannot re-enter any of those
+     * mid-loan to extract value before the repayment check below runs.
      * @param token The token to flash loan (address(0) for ETH)
      * @param amount The amount to flash loan
      * @param receiver The address that receives the tokens and callback
@@ -301,11 +351,17 @@ contract ActiveBucket is BucketVaultBase {
      */
     function flashLoan(address token, uint256 amount, address receiver, bytes calldata data)
         external
-        onlyOwner
         nonReentrant
         whenNotPaused
         whenPlatformOperational
     {
+        _requireHasShares();
+        // W4.2c: no mint/burn on this path, so the `_update` hook never fires -- explicit check
+        // required. Previously relied on `onlyOwner` to also guarantee a non-blacklisted caller
+        // (the owner-handover path already screens for that); now that any shareholder may call
+        // this, the check below is load-bearing on its own, not merely defensive.
+        _assertNotBlacklisted(msg.sender);
+
         if (receiver == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
 
@@ -338,29 +394,38 @@ contract ActiveBucket is BucketVaultBase {
         emit FlashLoan(msg.sender, receiver, token, amount, fee);
     }
 
+    /// @dev W5.3 (SC-10, B6): mirrors `PassiveBucket._requireHasShares()` exactly -- see this
+    /// file's `flashLoan` doc comment for why it is duplicated here rather than shared via
+    /// {BucketVaultBase}.
+    function _requireHasShares() private view {
+        if (balanceOf(msg.sender) == 0) revert InsufficientShares();
+    }
+
     /*//////////////////////////////////////////////////////////////
                         PAUSE MANAGEMENT
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Pause the contract (prevents deposits and redemptions)
-    function pause() external onlyOwner {
+    /// @dev Verifier fix (2026-10-04): added `whenCallerNotBlacklisted` -- an admin call by a
+    /// blacklisted owner, same gap class as every function in this section.
+    function pause() external onlyOwner whenCallerNotBlacklisted {
         _pause();
     }
 
     /// @notice Unpause the contract
-    function unpause() external onlyOwner {
+    function unpause() external onlyOwner whenCallerNotBlacklisted {
         _unpause();
     }
 
     /// @notice Pause swap and flash loan functions
-    function pauseSwap() external onlyOwner {
+    function pauseSwap() external onlyOwner whenCallerNotBlacklisted {
         if (swapPaused) revert SwapIsPaused();
         swapPaused = true;
         emit SwapPauseChanged(true);
     }
 
     /// @notice Unpause swap and flash loan functions
-    function unpauseSwap() external onlyOwner {
+    function unpauseSwap() external onlyOwner whenCallerNotBlacklisted {
         if (!swapPaused) revert SwapNotPaused();
         swapPaused = false;
         emit SwapPauseChanged(false);
@@ -378,7 +443,7 @@ contract ActiveBucket is BucketVaultBase {
      * @notice Update the 1inch router address
      * @param newRouter New router address
      */
-    function setOneInchRouter(address newRouter) external onlyOwner {
+    function setOneInchRouter(address newRouter) external onlyOwner whenCallerNotBlacklisted {
         if (newRouter == address(0)) revert ZeroAddress();
         oneInchRouter = newRouter;
         emit OneInchRouterUpdated(newRouter);
@@ -388,7 +453,7 @@ contract ActiveBucket is BucketVaultBase {
      * @notice Update the performance fee parameters
      * @param _performanceFeeBps  Performance fee in basis points (e.g., 500 = 5%)
      */
-    function setPerformanceFee(uint256 _performanceFeeBps) external onlyOwner {
+    function setPerformanceFee(uint256 _performanceFeeBps) external onlyOwner whenCallerNotBlacklisted {
         require(_performanceFeeBps <= BPS_DENOMINATOR, "Fee exceeds 100%");
         performanceFeeBps = _performanceFeeBps;
         emit PerformanceFeeUpdated(_performanceFeeBps);
@@ -428,7 +493,8 @@ contract ActiveBucket is BucketVaultBase {
         uint256 valueDifference = totalValueAfter > totalValueBefore
             ? totalValueAfter - totalValueBefore
             : totalValueBefore - totalValueAfter;
-        // provide performance fee or penalty only when owner is accountable (holding >= 5% of total supply)
+        // provide performance fee or penalty only when owner is accountable (holding >= MIN_OWNER_BPS,
+        // currently 1%, of total supply)
         if ((balanceOf(owner()) * BPS_DENOMINATOR) / tokenTotalSupply >= MIN_OWNER_BPS) {
             if (totalValueAfter > totalValueBefore) {
                 uint256 increase = totalValueAfter - totalValueBefore;
@@ -463,7 +529,9 @@ contract ActiveBucket is BucketVaultBase {
         }
 
         // Platform fee to BucketInfo
-        uint256 platformFeeValue = bucketInfo.calculateFee(valueDifference);
+        // W3.6: defensive local clamp on top of BucketInfo's own MAX_PLATFORM_FEE cap — see
+        // BucketVaultBase._boundedPlatformFee's doc comment for why.
+        uint256 platformFeeValue = _boundedPlatformFee(valueDifference, bucketInfo.calculateFee(valueDifference));
         if (platformFeeValue > 0 && newPrice > 0) {
             uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
             if (platformShares > 0) {
@@ -501,7 +569,20 @@ contract ActiveBucket is BucketVaultBase {
         return swapPaused;
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    function _registry() internal view override returns (IImplementationRegistry) {
+        return REGISTRY;
+    }
+
+    function _registryKind() internal pure override returns (IImplementationRegistry.Kind) {
+        return IImplementationRegistry.Kind.ActiveBucket;
+    }
+
+    /// @dev W3.3 (`09-DECISION-LOG.md` §10.1): `onlyOwner` alone is condition 1 of 4 — see
+    /// {BucketVaultBase._authorizeUpgradeCommon} for conditions 2-4 (announced-implementation
+    /// match, elapsed 48-hour timelock, live registry approval re-checked at this exact moment).
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+        _authorizeUpgradeCommon(newImplementation);
+    }
 
     /*//////////////////////////////////////////////////////////////
                           RECEIVE ETH

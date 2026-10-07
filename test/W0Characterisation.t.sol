@@ -21,12 +21,32 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {BucketInfo} from "../src/BucketInfo.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 import {MockV3Aggregator} from "@chainlink/tests/MockV3Aggregator.sol";
 
 import {MockBucketInfoForPassive, MockERC20, MockOneInchRouter} from "./PassiveBucket.t.sol";
 
-// _pending_: BucketInfo price-path characterisations (setTokenPrice bound/rate-limit,
-// Chainlink-path negative price, Chainlink-path staleness-blindness).
+// Task #35 (2026-10-01): three of this contract's original four characterisation tests --
+// test_CharacterisationSetTokenPriceHasNoUpperBoundOrRateLimit,
+// test_CharacterisationChainlinkPriceFeedIgnoresNegativePrice,
+// test_CharacterisationChainlinkPriceFeedIgnoresStaleness -- are RETIRED (deleted), not
+// rewritten. Reasons, cited in full in TASK35-SC-CHARACTERISATION-RETIRE-REPORT.md:
+//   1. Their hard-rule-13 evidentiary purpose (pin the pre-fix bug, then flip red when W1
+//      landed) is already DONE and already captured verbatim in W1-SC1-ORACLE-REPORT.md's
+//      `## Evidence` section (the red `forge test` output) -- deleting the test here does not
+//      delete that evidence.
+//   2. Forward-looking regression coverage of the NEW, correct behaviour already exists and is
+//      more thorough than a rewrite of these three would be: test/W1OracleValidation.t.sol
+//      asserts negative-answer rejection (test_RevertGetTokenPriceOnNegativeAnswer), staleness
+//      rejection (test_RevertGetTokenPriceOnStaleByTimestamp/OnStaleRound/OnIncompleteRound),
+//      and the setTokenPrice rate limit/deviation cap (the test_A1_* group).
+//   3. A permanently-red suite (574 total / 3 failed on every run since W1 landed, per
+//      W1.7-SC-FACTORYBYPASS-REPORT.md §7) is itself a cost: every subsequent wave's report has
+//      had to carry the same "these 3 are expected" footnote, which is exactly the condition
+//      that let a genuinely new regression hide among "expected" failures.
+// test_CharacterisationManualPriceStalenessBoundaryStillEnforced is UNCHANGED and untouched --
+// it documents behaviour that did NOT change and stays green, which is the deliberate contrast
+// case the file's own header comment describes.
 contract W0CharacterisationBucketInfoTest is Test {
     BucketInfo public bucketInfo;
     address public nativeToken;
@@ -34,58 +54,6 @@ contract W0CharacterisationBucketInfoTest is Test {
     function setUp() public {
         bucketInfo = new BucketInfo();
         nativeToken = address(0); // whitelisted by the constructor, BucketInfo.sol:79-81
-    }
-
-    /// CHARACTERISATION: documents current behaviour, expected to change in W1 (sc-oracle).
-    /// setTokenPrice (BucketInfo.sol:167-174) has no upper bound, no maximum-deviation-from-
-    /// last-price check, and no minimum interval between updates -- only `price > 0` and
-    /// `isWhitelisted[token]`. The owner can move a price from $1 to the maximum uint256 value
-    /// in a single call, in the same block as the previous update.
-    function test_CharacterisationSetTokenPriceHasNoUpperBoundOrRateLimit() public {
-        bucketInfo.setTokenPrice(nativeToken, 1);
-        assertEq(bucketInfo.getTokenPrice(nativeToken), 1);
-
-        // Same block, no cooldown, no deviation cap: jump straight to type(uint256).max.
-        bucketInfo.setTokenPrice(nativeToken, type(uint256).max);
-        assertEq(bucketInfo.getTokenPrice(nativeToken), type(uint256).max);
-    }
-
-    /// CHARACTERISATION: documents current behaviour, expected to change in W1 (sc-oracle).
-    /// getTokenPrice's Chainlink branch (BucketInfo.sol:226-238) destructures
-    /// `latestRoundData()` as `(, int256 price,,,)` -- it reads only the price and discards
-    /// roundId, startedAt, updatedAt and answeredInRound. It also never checks `price > 0`
-    /// before the explicit `uint256(price)` conversion. A negative answer is NOT rejected: the
-    /// int256->uint256 conversion reinterprets the two's-complement bit pattern, so a small
-    /// negative answer becomes a value near type(uint256).max, not a revert.
-    function test_CharacterisationChainlinkPriceFeedIgnoresNegativePrice() public {
-        MockV3Aggregator feed = new MockV3Aggregator(8, 100e8); // starts at a sane $100 price
-        bucketInfo.setPriceFeed(nativeToken, address(feed));
-
-        feed.updateAnswer(-100e8); // negative price, same 8 decimals as PRICE_DECIMALS
-
-        uint256 price = bucketInfo.getTokenPrice(nativeToken); // does not revert
-        // uint256(int256(-100e8)) == 2**256 - 100e8, i.e. astronomically far from a real price.
-        assertEq(price, uint256(int256(-100e8)));
-        assertGt(price, 1e30); // sanity check that this is "huge", not a small wrapped value
-    }
-
-    /// CHARACTERISATION: documents current behaviour, expected to change in W1 (sc-oracle).
-    /// The Chainlink branch has no staleness check at all -- contrast with the manual-price
-    /// branch just below it (BucketInfo.sol:239-243), which reverts "Price is outdated" past
-    /// 30 days. A Chainlink feed's `updatedAt` can be arbitrarily old (or even in the past
-    /// relative to a stale/halted feed) and getTokenPrice will still return its answer.
-    function test_CharacterisationChainlinkPriceFeedIgnoresStaleness() public {
-        vm.warp(1000 days); // move off genesis timestamp so the subtraction below cannot underflow
-        MockV3Aggregator feed = new MockV3Aggregator(8, 100e8);
-        bucketInfo.setPriceFeed(nativeToken, address(feed));
-
-        // Round data explicitly timestamped 400 days in the past -- far past the 30-day
-        // staleness cutoff the manual-price branch enforces.
-        feed.updateRoundData(1, 100e8, block.timestamp - 400 days, block.timestamp - 400 days);
-        vm.warp(block.timestamp + 400 days);
-
-        uint256 price = bucketInfo.getTokenPrice(nativeToken); // does not revert
-        assertEq(price, 100e8);
     }
 
     /// CHARACTERISATION: documents current behaviour, NOT expected to change (recorded here as
@@ -132,7 +100,11 @@ contract W0CharacterisationPassiveBucketTest is Test {
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
-        implementation = new PassiveBucket();
+        ImplementationRegistry registry = new ImplementationRegistry(address(this));
+        implementation = new PassiveBucket(address(registry));
+        // Task #33 (W1.7 direct-proxy-bypass fix): this test deploys its proxy directly, so the
+        // test contract itself must be an authorized "factory".
+        registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
@@ -218,10 +190,17 @@ contract W0CharacterisationPassiveBucketTest is Test {
     /// contract owners should not able to change [the oracle]... to protect contract investors
     /// from being rug pulled by bad price feed source") and any W1 fix to the factory-supplied
     /// BucketInfo pointer (root CLAUDE.md §8, the "factory-immutable" item) must preserve this
-    /// gate exactly. updateBucketInfo (PassiveBucket.sol:708-718) is gated on
+    /// gate exactly. `proposeUpdateBucketInfo` (BucketVaultBase.sol) is gated on
     /// `IBucketInfo(bucketInfo).owner()`, i.e. the CURRENT BucketInfo's owner -- NOT
     /// `msg.sender == owner()` of the vault itself. The vault owner cannot call it if they are
     /// not also the BucketInfo owner.
+    /// @dev W3.2 (D3) turned the old single-call `updateBucketInfo` into propose+timelock+veto+
+    /// execute; the GATE this test pins (propose is BucketInfo-owner-gated, not vault-owner-
+    /// gated) is unchanged by that rewrite, only the call it exercises is renamed to
+    /// `proposeUpdateBucketInfo` and a warp+`executeUpdateBucketInfo` was added so the success
+    /// path still ends with the repoint actually applied. See W3-SC-GOVERNANCE-REPORT.md
+    /// `## Corrections to my briefing` (CLAUDE.md hard rule 6/9 scope note, same exception this
+    /// file's header already documents for the W2 edit above).
     function test_CharacterisationUpdateBucketInfoGatedOnBucketInfoOwnerNotVaultOwner() public {
         address vaultOwner = bucket.owner();
         address bucketInfoOwner = makeAddr("bucketInfoOwner");
@@ -233,11 +212,14 @@ contract W0CharacterisationPassiveBucketTest is Test {
         // The vault's own owner is refused -- they are not the BucketInfo's owner.
         vm.prank(vaultOwner);
         vm.expectRevert(BucketVaultBase.UnauthorizedBucketInfoUpdate.selector);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
 
         // The BucketInfo's owner succeeds, regardless of whether they are the vault's owner.
         vm.prank(bucketInfoOwner);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        bucket.executeUpdateBucketInfo(); // permissionless once the delay has elapsed
         assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
     }
 }

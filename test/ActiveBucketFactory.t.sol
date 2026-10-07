@@ -4,6 +4,7 @@ pragma solidity ^0.8.33;
 import {Test} from "forge-std/Test.sol";
 import {ActiveBucket} from "../src/ActiveBucket.sol";
 import {ActiveBucketFactory} from "../src/ActiveBucketFactory.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -61,6 +62,28 @@ contract MockBucketInfoForABFactory {
         operational = _operational;
     }
 
+    // --- W4.2a regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
+    // for the full explanation. Defaults to false.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
+    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     receive() external payable {}
 }
 
@@ -112,6 +135,10 @@ contract ActiveBucketFactoryTest is Test {
     ActiveBucket public implementation;
     ActiveBucketFactory public factory;
     MockBucketInfoForABFactory public bucketInfo;
+    // W3.3: platform-owned registry ActiveBucket's immutable constructor parameter now
+    // requires. Not exercised by these factory tests -- deployed purely so
+    // `new ActiveBucket(address)` compiles.
+    ImplementationRegistry public registry;
     MockERC20ForABFactory public tokenA;
     MockERC20ForABFactory public tokenB;
 
@@ -149,8 +176,15 @@ contract ActiveBucketFactoryTest is Test {
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
-        implementation = new ActiveBucket();
+        registry = new ImplementationRegistry(deployer);
+        implementation = new ActiveBucket(address(registry));
         factory = new ActiveBucketFactory(address(implementation), address(bucketInfo));
+        // Task #33 (W1.7 direct-proxy-bypass fix): `initialize()` now requires
+        // `REGISTRY.isAuthorizedFactory(msg.sender)`. Inside `ERC1967Proxy`'s constructor,
+        // delegatecall preserves `msg.sender` as whoever called `new ERC1967Proxy(...)` --
+        // here, `factory` itself (since `createActiveBucket` does that deployment), not the
+        // EOA/test that called `factory.createActiveBucket(...)`.
+        registry.setAuthorizedFactory(address(factory), true);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -367,6 +401,7 @@ contract ActiveBucketFactoryTest is Test {
         bucketInfo2.addToken(address(tokenB), TOKEN_B_PRICE);
 
         ActiveBucketFactory factory2 = new ActiveBucketFactory(address(implementation), address(bucketInfo2));
+        registry.setAuthorizedFactory(address(factory2), true);
 
         address proxy1 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         address proxy2 = factory2.createActiveBucket(mockOneInch, NAME, SYMBOL);

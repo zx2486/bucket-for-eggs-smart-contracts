@@ -54,7 +54,8 @@ contract ActiveBucketFactory {
     /**
      * @notice Deploy a new ActiveBucket proxy and initialise it
      * @dev The caller becomes the owner of the new contract. Portfolio
-     * composition is managed by the owner via swapBy1inch and flashLoan.
+     * composition is managed by the owner via swapBy1inch. flashLoan is holder-callable
+     * (W5.3, SC-10, B6), not owner-exclusive.
      * The BucketInfo address is this factory's own immutable {bucketInfo} — it is no longer a
      * caller-supplied parameter (W1.7; see the doc comment on {bucketInfo}).
      * @param oneInchRouter    Address of the 1inch aggregation router

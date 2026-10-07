@@ -5,6 +5,9 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
+import {TimelockedAdmin} from "../src/libs/TimelockedAdmin.sol";
+import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
+import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -95,6 +98,35 @@ contract MockBucketInfoForPassive {
         }
     }
 
+    // --- W4.2a regression fix (task #61): this mock predates the blacklist hook and did not
+    // implement `isBlacklisted`, so BucketVaultBase._isBlacklistedFailClosed's try/catch treated
+    // every call as an unreachable BucketInfo and failed closed (D2), reverting EVERY mint/burn/
+    // transfer -- including the very first deposit's DEAD_SHARES mint. Defaults to false (nobody
+    // blacklisted) so existing tests are unaffected unless they opt in via setBlacklisted.
+    mapping(address => bool) public blacklisted;
+
+    function isBlacklisted(address account) external view returns (bool) {
+        return blacklisted[account];
+    }
+
+    function setBlacklisted(address account, bool status) external {
+        blacklisted[account] = status;
+    }
+
+    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): this mock
+    // predates {OraclePricingLib}'s per-token oracle-health wiring and did not implement
+    // `isPotentiallyOutpriced`/`getPriceFeed`, so `_syncOutpricedStatus` (now called from
+    // deposit/redeem/swap/rebalance) reverted with "unrecognized function selector" on every
+    // call. Defaults mirror "no feed configured, never outpriced" so existing tests are
+    // unaffected unless they opt in.
+    function isPotentiallyOutpriced(address) external pure returns (bool) {
+        return false;
+    }
+
+    function getPriceFeed(address) external pure returns (address) {
+        return address(0);
+    }
+
     receive() external payable {}
 }
 
@@ -169,6 +201,10 @@ contract PassiveBucketTest is Test {
     MockERC20 public tokenA; // 18 decimals (like WETH)
     MockERC20 public tokenB; // 6 decimals (like USDT)
     MockOneInchRouter public oneInchRouter;
+    // W3.3: platform-owned registry PassiveBucket's immutable constructor parameter now
+    // requires. Deployed purely so `new PassiveBucket(address)` compiles in most tests here;
+    // queue/cancel/authorize tests approve into it directly.
+    ImplementationRegistry public registry;
 
     address public owner;
     address public user1;
@@ -207,7 +243,13 @@ contract PassiveBucketTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE); // Token B
 
         // Deploy implementation
-        implementation = new PassiveBucket();
+        registry = new ImplementationRegistry(owner);
+        implementation = new PassiveBucket(address(registry));
+        // Task #33 (W1.7 direct-proxy-bypass fix): this test suite deploys proxies directly
+        // (not through `PassiveBucketFactory`), so the test contract itself must be an
+        // authorized "factory" from the registry's point of view, or every `initialize()` call
+        // below reverts with `UnauthorizedInitializer()`.
+        registry.setAuthorizedFactory(address(this), true);
 
         // Prepare distributions: 50% ETH, 30% Token A, 20% Token B
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -265,7 +307,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeZeroAddress() public {
-        PassiveBucket impl = new PassiveBucket();
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
@@ -278,7 +320,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeInvalidWeights() public {
-        PassiveBucket impl = new PassiveBucket();
+        PassiveBucket impl = new PassiveBucket(address(registry));
         // Weights sum to 90 instead of 100
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
@@ -292,7 +334,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeDuplicateTokens() public {
-        PassiveBucket impl = new PassiveBucket();
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(0), 50);
@@ -305,7 +347,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeEmptyDistributions() public {
-        PassiveBucket impl = new PassiveBucket();
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](0);
 
         bytes memory initData = abi.encodeWithSelector(
@@ -526,30 +568,46 @@ contract PassiveBucketTest is Test {
         vm.prank(user1);
         bucket.deposit{value: 100 ether}(address(0), 0);
 
+        // ⚠ Reads the live threshold from the contract (bucket.MIN_OWNER_BPS() /
+        // bucket.BPS_DENOMINATOR()) rather than hardcoding a percentage, after this test was
+        // found broken by task #47/#51's back-and-forth on MIN_OWNER_BPS (500 then reverted to
+        // 100 by direct instruction 2026-09-30): the previous version hardcoded `500` in its
+        // threshold formula below, so when the source constant changed to `100` this test kept
+        // computing a `tooMuch` redemption sized to breach the OLD 5% boundary, not the real,
+        // now-1% one -- `tooMuch` landed well above the real threshold and `redeem` succeeded
+        // instead of reverting, so `vm.expectRevert` failed. Deriving both quantities from the
+        // contract itself makes this test correct for whatever MIN_OWNER_BPS is currently set to.
+        uint256 minOwnerBps = bucket.MIN_OWNER_BPS();
+        uint256 bpsDenom = bucket.BPS_DENOMINATOR();
+
         uint256 ownerShares = bucket.balanceOf(owner);
         uint256 supply = bucket.totalSupply();
 
-        // Owner holds ~9.09%. Redeem a small portion so owner stays above 5%.
-        // Max redeemable while staying >= 5%:
-        //   ownerShares - x >= 0.05 * (supply - x)  =>  x <= (ownerShares - 0.05*supply) / 0.95
-        // Use a quarter of owner shares (~4.5% of remaining supply ≈ 6.98%)
+        // Owner holds ~9.09%. Redeem a small portion so owner stays above the MIN_OWNER_BPS floor
+        // (comfortably true for any floor at or below ~9%, which covers both 500 and 100 bps).
         uint256 smallRedeem = ownerShares / 4;
         bucket.redeem(smallRedeem);
 
         assertTrue(bucket.isBucketAccountable(), "Owner should still be accountable after small redeem");
 
-        // Now try to redeem enough to drop below 5% — should revert
+        // Now try to redeem enough to drop below the MIN_OWNER_BPS floor — should revert.
         uint256 remainingOwner = bucket.balanceOf(owner);
         uint256 newSupply = bucket.totalSupply();
 
-        // Calculate amount that would push owner below 5%
-        // Need: (remainingOwner - x) / (newSupply - x) < 0.05
-        // Solve: x > (remainingOwner - 0.05*newSupply) / 0.95
-        uint256 threshold = ((remainingOwner * 10000) - (newSupply * 500)) / 9500;
+        // Calculate the redemption amount that would push the owner's post-redeem ratio just
+        // below minOwnerBps/bpsDenom:
+        //   (remainingOwner - x) / (newSupply - x) < minOwnerBps/bpsDenom
+        //   x > (remainingOwner*bpsDenom - newSupply*minOwnerBps) / (bpsDenom - minOwnerBps)
+        uint256 threshold = ((remainingOwner * bpsDenom) - (newSupply * minOwnerBps)) / (bpsDenom - minOwnerBps);
         uint256 tooMuch = threshold + 1e18; // safely over the limit
 
         if (tooMuch <= remainingOwner) {
-            vm.expectRevert(PassiveBucket.OwnerNotAccountable.selector);
+            // W5 (sc-stable-exit, task #64): OwnerNotAccountable moved to BucketVaultBase —
+            // see that error's doc comment. Derived-contract member lookup (`PassiveBucket.X`)
+            // does not resolve an inherited custom error in this solc version, matching every
+            // other moved-to-base error already referenced via `BucketVaultBase.X` elsewhere in
+            // this file.
+            vm.expectRevert(BucketVaultBase.OwnerNotAccountable.selector);
             bucket.redeem(tooMuch);
         }
     }
@@ -585,7 +643,7 @@ contract PassiveBucketTest is Test {
 
     function test_RevertUpdateDistributionsNotAccountable() public {
         // Owner has no shares initially  - needs to deposit first
-        // User deposits so owner owns < 5%
+        // User deposits so owner owns 0% -- below MIN_OWNER_BPS regardless of its current value
         vm.prank(user1);
         bucket.deposit{value: 100 ether}(address(0), 0);
 
@@ -593,7 +651,7 @@ contract PassiveBucketTest is Test {
         PassiveBucket.BucketDistribution[] memory newDists = new PassiveBucket.BucketDistribution[](1);
         newDists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
-        vm.expectRevert(PassiveBucket.OwnerNotAccountable.selector);
+        vm.expectRevert(BucketVaultBase.OwnerNotAccountable.selector);
         bucket.updateBucketDistributions(newDists);
     }
 
@@ -649,6 +707,43 @@ contract PassiveBucketTest is Test {
         vm.prank(user1);
         vm.expectRevert();
         bucket.pause();
+    }
+
+    /// @dev Parity gap vs. `test/ActiveBucket.t.sol`'s `test_RevertUnpauseNotOwner` (ActiveBucket
+    /// had this test, PassiveBucket did not) -- task #42 (W3.5).
+    function test_RevertUnpauseNotOwner() public {
+        bucket.deposit{value: 10 ether}(address(0), 0);
+        bucket.pause();
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.unpause();
+    }
+
+    /// @dev W3.5 design rationale (`04-CONTRACTS-IMPLEMENTATION-PLAN.md`, review reply §4.5(4)):
+    /// `unpause()` is deliberately plain `onlyOwner`, NOT `onlyAccountableOwner`. This proves the
+    /// failure mode the design guards against: an owner who WAS accountable at pause time
+    /// (`pause()` itself is `onlyAccountableOwner`) can fall below `MIN_OWNER_BPS` while the
+    /// vault sits paused -- here via plain ERC20 `transfer`, which is not `whenNotPaused`-gated
+    /// (only deposit/redeem/rebalance are) -- and `unpause()` must still succeed. If it required
+    /// accountability too, the vault would be PERMANENTLY stuck paused: deposit/redeem are
+    /// `whenNotPaused`, so there is no path back to accountability once paused and diluted.
+    function test_UnpauseSucceedsWhenOwnerNotAccountable() public {
+        bucket.deposit{value: 10 ether}(address(0), 0);
+        assertTrue(bucket.isBucketAccountable());
+
+        bucket.pause();
+        assertTrue(bucket.paused());
+
+        // Dilute the owner below MIN_OWNER_BPS while paused, via plain ERC20 transfer (not
+        // whenNotPaused-gated) -- leave the owner ~0.1% of supply, well under the 1% floor
+        // (BucketVaultBase.sol:186).
+        uint256 ownerShares = bucket.balanceOf(address(this));
+        bucket.transfer(user1, ownerShares - (ownerShares / 1000));
+        assertFalse(bucket.isBucketAccountable());
+
+        bucket.unpause();
+        assertFalse(bucket.paused());
     }
 
     function test_PauseSwap() public {
@@ -908,7 +1003,9 @@ contract PassiveBucketTest is Test {
         newBucketInfo.addToken(address(0), ETH_PRICE);
 
         // Owner of current bucketInfo is this contract (deployed in setUp)
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        bucket.executeUpdateBucketInfo();
 
         assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
     }
@@ -920,9 +1017,14 @@ contract PassiveBucketTest is Test {
         MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
         newBucketInfo.addToken(address(0), ETH_PRICE);
 
-        // user1 (the BucketInfo owner) can update
+        // user1 (the BucketInfo owner) can propose
         vm.prank(user1);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+
+        // execute is permissionless -- anyone may apply it once the delay has elapsed
+        bucket.executeUpdateBucketInfo();
 
         assertEq(address(bucket.bucketInfo()), address(newBucketInfo));
     }
@@ -933,12 +1035,53 @@ contract PassiveBucketTest is Test {
         // user1 is NOT the BucketInfo owner
         vm.prank(user1);
         vm.expectRevert(BucketVaultBase.UnauthorizedBucketInfoUpdate.selector);
-        bucket.updateBucketInfo(address(newBucketInfo));
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
     }
 
     function test_RevertUpdateBucketInfoZeroAddress() public {
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
-        bucket.updateBucketInfo(address(0));
+        bucket.proposeUpdateBucketInfo(address(0));
+    }
+
+    function test_RevertExecuteUpdateBucketInfoBeforeTimelockElapsed() public {
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        (, uint256 eta) = bucket.pendingBucketInfoUpdate();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        bucket.executeUpdateBucketInfo();
+    }
+
+    function test_RevertExecuteUpdateBucketInfoWithNothingPending() public {
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.executeUpdateBucketInfo();
+    }
+
+    /// @notice D3's veto window: the vault's OWN owner may cancel a proposed repoint before
+    /// it executes.
+    function test_VetoUpdateBucketInfoByVaultOwner() public {
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+        newBucketInfo.addToken(address(0), ETH_PRICE);
+
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+        bucket.vetoUpdateBucketInfo(); // bucket.owner() is this test contract
+
+        vm.warp(block.timestamp + bucket.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.executeUpdateBucketInfo();
+
+        assertTrue(address(bucket.bucketInfo()) != address(newBucketInfo));
+    }
+
+    function test_RevertVetoUpdateBucketInfoByNonVaultOwner() public {
+        MockBucketInfoForPassive newBucketInfo = new MockBucketInfoForPassive();
+        bucket.proposeUpdateBucketInfo(address(newBucketInfo));
+
+        vm.prank(user1); // user1 is not bucket.owner()
+        vm.expectRevert(); // OwnableUpgradeable.OwnableUnauthorizedAccount
+        bucket.vetoUpdateBucketInfo();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1109,6 +1252,233 @@ contract PassiveBucketTest is Test {
         uint256 expectedPrice = (totalValue * 1e18) / supply;
 
         assertEq(bucket.sharePrice(), expectedPrice, "sharePrice() must match the live NAV formula post-deposit");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3.3 (basic)
+    //////////////////////////////////////////////////////////////*/
+    // Basic happy-path/revert-path coverage for {queueUpgrade}/{cancelUpgrade}/{_authorizeUpgrade}
+    // per `09-DECISION-LOG.md` §10.1. The exhaustive adversarial suite (namespace isolation,
+    // factory-handover regression, renounceOwnership/Ownable2Step semantics, pause-during-queue)
+    // is task #45's own gate suite, not duplicated here.
+
+    function _deployApprovedPassiveBucketImplementation() internal returns (address newImpl) {
+        newImpl = address(new PassiveBucket(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
+    }
+
+    function test_QueueUpgrade_SetsPendingAndEta() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+
+        assertEq(bucket.pendingImplementation(), newImpl);
+        assertEq(bucket.upgradeEta(), block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+    }
+
+    function test_RevertQueueUpgradeNotOwner() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.queueUpgrade(newImpl);
+    }
+
+    function test_RevertQueueUpgradeZeroAddress() public {
+        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
+        bucket.queueUpgrade(address(0));
+    }
+
+    function test_UpgradeSucceeds_AfterQueueApprovalAndElapsedDelay() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        bucket.upgradeToAndCall(newImpl, "");
+
+        assertEq(bucket.pendingImplementation(), address(0));
+        assertEq(bucket.upgradeEta(), 0);
+    }
+
+    function test_RevertUpgrade_BeforeTimelockElapsed() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        uint256 eta = bucket.upgradeEta();
+        vm.expectRevert(abi.encodeWithSelector(TimelockedAdmin.TimelockNotElapsed.selector, eta, block.timestamp));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NothingQueued() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_ImplementationMismatch() public {
+        address queuedImpl = _deployApprovedPassiveBucketImplementation();
+        address otherImpl = _deployApprovedPassiveBucketImplementation();
+
+        bucket.queueUpgrade(queuedImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(
+            abi.encodeWithSelector(BucketVaultBase.UpgradeImplementationMismatch.selector, queuedImpl, otherImpl)
+        );
+        bucket.upgradeToAndCall(otherImpl, "");
+    }
+
+    /// @notice Registry approval is re-checked at EXECUTION time, not just at queue time — a
+    /// mid-window platform revocation actually blocks the upgrade (the plan's own "test 3",
+    /// 04 §5.6.1/§10.1). This is the scenario most likely to be omitted.
+    function test_RevertUpgrade_RegistryApprovalRevokedMidWindow() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        registry.revoke(IImplementationRegistry.Kind.PassiveBucket, newImpl);
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_NeverApproved() public {
+        address newImpl = address(new PassiveBucket(address(registry)));
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_ClearsPendingState() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        bucket.cancelUpgrade();
+
+        assertEq(bucket.pendingImplementation(), address(0));
+        assertEq(bucket.upgradeEta(), 0);
+
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+        vm.expectRevert(TimelockedAdmin.NoProposalPending.selector);
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_CancelUpgrade_NoOpWhenNothingPending() public {
+        bucket.cancelUpgrade();
+        assertEq(bucket.pendingImplementation(), address(0));
+    }
+
+    function test_RevertCancelUpgradeNotOwner() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.cancelUpgrade();
+    }
+
+    function test_RevertUpgrade_NotOwner() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                UPGRADE GOVERNANCE TESTS — W3 GATE (task #45)
+    //////////////////////////////////////////////////////////////*/
+    // Replicated from `ActiveBucket.t.sol`'s equivalent block -- see that file's comment header
+    // for the full rationale (namespace isolation, platform-cannot-trigger, renounceOwnership/
+    // single-step-Ownable semantics, pause-during-queue independence). Factory-handover
+    // regression (owner() == msg.sender inside the creation transaction) is already covered by
+    // `PassiveBucketFactory.t.sol`'s `test_Create_OwnerIsCallerNotFactory` /
+    // `test_Create_OwnerIsNotFactory` -- not duplicated here.
+
+    function test_RevertRenounceOwnership() public {
+        vm.expectRevert(BucketVaultBase.RenounceOwnershipDisabled.selector);
+        bucket.renounceOwnership();
+    }
+
+    function test_TransferOwnershipIsSingleStepNotTwoStep() public {
+        bucket.transferOwnership(user1);
+        assertEq(
+            bucket.owner(),
+            user1,
+            "single-step Ownable must hand over ownership immediately, with no acceptOwnership() call"
+        );
+    }
+
+    function test_RevertUpgrade_PlatformCannotTrigger() public {
+        // `dists` is a local variable inside `setUp()`, not stored state -- reconstruct the
+        // same three-entry distribution here (see setUp(), lines ~199-243).
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
+        dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
+        dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 30);
+        dists[2] = PassiveBucket.BucketDistribution(address(tokenB), 20);
+
+        bytes memory initData = abi.encodeWithSelector(
+            PassiveBucket.initialize.selector,
+            address(bucketInfo),
+            dists,
+            address(oneInchRouter),
+            "PassiveBucket Share",
+            "pBKT"
+        );
+        // Task #33: this test deliberately simulates a customer deploying their own proxy
+        // directly (not through the factory) to get a vault the platform does not own. That is
+        // now exactly the shape the bypass fix blocks by default, so `user2` must be explicitly
+        // authorized here -- the point of this test is upgrade-authority, not the bypass itself.
+        registry.setAuthorizedFactory(user2, true);
+        vm.prank(user2);
+        ERC1967Proxy customerProxy = new ERC1967Proxy(address(implementation), initData);
+        PassiveBucket customerBucket = PassiveBucket(payable(address(customerProxy)));
+        assertEq(customerBucket.owner(), user2, "customerBucket must be owned by the customer, not the platform");
+
+        address newImpl = address(new PassiveBucket(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
+
+        vm.expectRevert();
+        customerBucket.queueUpgrade(newImpl);
+
+        vm.prank(user2);
+        customerBucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + customerBucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert();
+        customerBucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_RevertUpgrade_ApprovedForWrongKind() public {
+        address newImpl = address(new PassiveBucket(address(registry)));
+        registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
+
+        bucket.queueUpgrade(newImpl);
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.UpgradeNotApproved.selector, newImpl));
+        bucket.upgradeToAndCall(newImpl, "");
+    }
+
+    function test_UpgradeQueued_PlatformPauseDoesNotBlockIt() public {
+        address newImpl = _deployApprovedPassiveBucketImplementation();
+        bucket.queueUpgrade(newImpl);
+
+        bucketInfo.setOperational(false);
+        assertFalse(bucketInfo.isPlatformOperational());
+
+        vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
+
+        bucket.upgradeToAndCall(newImpl, "");
+        assertEq(bucket.pendingImplementation(), address(0));
     }
 
     // Allow test contract (owner) to receive ETH from redeem
