@@ -668,6 +668,105 @@ contract PassiveBucketTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
+                MAX VALUE-LOSS BPS TESTS (task #97, extended task #98)
+    //////////////////////////////////////////////////////////////*/
+
+    function test_MaxValueLossBpsDefaultsToFiftyBpsWhenUnset() public view {
+        // Zero means "use the hardcoded 0.5% default" — never zero itself.
+        assertEq(bucket.maxValueLossBps(), 50);
+    }
+
+    function test_EpochValueLossBudgetBpsDefaultsToOneFiftyBpsWhenUnset() public view {
+        // Zero means "use the hardcoded 1.5%/day default" — never zero itself.
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_SetMaxValueLossBpsUpdatesGetter() public {
+        bucket.setMaxValueLossBps(300, 0); // 3% per-call, leave epoch budget at default
+        assertEq(bucket.maxValueLossBps(), 300);
+    }
+
+    function test_SetMaxValueLossBpsUpdatesEpochBudgetGetter() public {
+        bucket.setMaxValueLossBps(0, 700); // leave per-call at default, 7%/day epoch budget
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+    }
+
+    function test_SetMaxValueLossBpsSetsBothIndependentlyInOneCall() public {
+        bucket.setMaxValueLossBps(500, 700);
+        assertEq(bucket.maxValueLossBps(), 500);
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+    }
+
+    function test_SetMaxValueLossBpsEmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit BucketVaultBase.MaxValueLossBpsUpdated(300, 700);
+        bucket.setMaxValueLossBps(300, 700);
+    }
+
+    function test_SetMaxValueLossBpsAtCeilingSucceeds() public {
+        // Exactly 1000 bps (10%) is the ceiling, not an off-by-one boundary that reverts.
+        bucket.setMaxValueLossBps(1000, 1000);
+        assertEq(bucket.maxValueLossBps(), 1000);
+        assertEq(bucket.epochValueLossBudgetBps(), 1000);
+    }
+
+    function test_RevertSetMaxValueLossBpsAboveCeiling() public {
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.MaxValueLossBpsExceedsCeiling.selector, 1001));
+        bucket.setMaxValueLossBps(1001, 0);
+    }
+
+    function test_RevertSetEpochValueLossBudgetBpsAboveCeiling() public {
+        // The epoch budget field is checked against the same ceiling, independently of the
+        // per-call field — a valid per-call value does not excuse an over-ceiling epoch budget.
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.MaxValueLossBpsExceedsCeiling.selector, 1001));
+        bucket.setMaxValueLossBps(300, 1001);
+    }
+
+    function test_SetMaxValueLossBpsBackToZeroRestoresDefault() public {
+        bucket.setMaxValueLossBps(1000, 1000);
+        assertEq(bucket.maxValueLossBps(), 1000);
+        assertEq(bucket.epochValueLossBudgetBps(), 1000);
+
+        // Owner can lower it again, including back down to 0 (which re-resolves to each field's
+        // own default rather than permanently sticking at whatever ceiling was last set) — and
+        // the two fields restore independently, not jointly.
+        bucket.setMaxValueLossBps(0, 0);
+        assertEq(bucket.maxValueLossBps(), 50);
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_SetMaxValueLossBpsZeroRestoresOnlyThatFieldIndependently() public {
+        bucket.setMaxValueLossBps(500, 700);
+
+        // Restoring only the per-call bound to default must not disturb the epoch budget.
+        bucket.setMaxValueLossBps(0, 700);
+        assertEq(bucket.maxValueLossBps(), 50);
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+
+        // And vice versa: restoring only the epoch budget must not disturb the per-call bound.
+        bucket.setMaxValueLossBps(0, 0);
+        bucket.setMaxValueLossBps(500, 700);
+        bucket.setMaxValueLossBps(500, 0);
+        assertEq(bucket.maxValueLossBps(), 500);
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_RevertSetMaxValueLossBpsNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.setMaxValueLossBps(300, 0);
+    }
+
+    function test_RevertSetMaxValueLossBpsBlacklistedOwner() public {
+        // onlyOwnerNotBlacklisted: the owner itself, if blacklisted, is locked out of its own
+        // risk-tolerance control just like every other admin function on this base.
+        bucketInfo.setBlacklisted(owner, true);
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, owner));
+        bucket.setMaxValueLossBps(300, 0);
+    }
+
+    /*//////////////////////////////////////////////////////////////
                       ACCOUNTABILITY TESTS
     //////////////////////////////////////////////////////////////*/
 

@@ -30,22 +30,23 @@ contract BucketInfo is Ownable2Step, Pausable {
 
     event TokenWhitelisted(address indexed token, bool whitelisted);
     /// @dev Emitted the FIRST time a token's manual price is ever set. This is the
-    /// unbounded, no-deviation-check, no-interval-check path (A1) -- kept as a distinct
-    /// event (rather than reusing TokenPriceUpdated with a sentinel) specifically so the
-    /// unbounded case is observable off-chain without inspecting call data.
+    /// unbounded, no-deviation-check, no-interval-check path -- kept as a distinct event
+    /// (rather than reusing TokenPriceUpdated with a sentinel) specifically so the unbounded
+    /// case is observable off-chain without inspecting call data.
     event TokenPriceInitialized(address indexed token, uint256 price);
     /// @dev Emitted on every subsequent manual price update, i.e. once a token already has
-    /// a previous price on record. Subject to the A1 rate limit (see setTokenPrice).
+    /// a previous price on record. Subject to the deviation/interval rate limit (see
+    /// setTokenPrice).
     event TokenPriceUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
     event PriceFeedUpdated(address indexed token, address priceFeed);
     event MaxPriceStalenessUpdated(address indexed token, uint256 newMaxStaleness);
     event PlatformFeeUpdated(uint256 newFee);
     event FeesWithdrawn(address indexed tokenAddr, address indexed to, uint256 amount);
 
-    /// @dev W3.4 timelock events. One Proposed/Canceled pair per timelocked setter family
-    /// (whitelist additions, price feeds, platform fee); the corresponding *Updated/
-    /// *Whitelisted event above (already existed pre-W3) is reused to signal the applied
-    /// change at execute time, so indexers built against the old event names keep working.
+    /// @dev One Proposed/Canceled pair per timelocked setter family (whitelist additions,
+    /// price feeds, platform fee); the corresponding *Updated/*Whitelisted event above is
+    /// reused to signal the applied change at execute time, so indexers built against the
+    /// old event names keep working.
     event WhitelistAdditionProposed(address indexed token, uint256 eta);
     event WhitelistAdditionCanceled(address indexed token);
     event PriceFeedProposed(address indexed token, address priceFeed, uint256 eta);
@@ -53,8 +54,8 @@ contract BucketInfo is Ownable2Step, Pausable {
     event PlatformFeeProposed(uint256 newFee, uint256 eta);
     event PlatformFeeCanceled(uint256 canceledFee);
 
-    /// @dev W4.1 (D2, compliance blacklist): single event covers both add and remove, mirroring
-    /// {TokenWhitelisted}'s own single-event-with-bool convention.
+    /// @dev Single event covers both add and remove, mirroring {TokenWhitelisted}'s own
+    /// single-event-with-bool convention.
     event AddressBlacklistUpdated(address indexed account, bool blacklisted);
 
     /*//////////////////////////////////////////////////////////////
@@ -76,8 +77,7 @@ contract BucketInfo is Ownable2Step, Pausable {
 
     /// @dev Per-token override of the Chainlink staleness window (seconds). 0 means
     /// "use DEFAULT_MAX_PRICE_STALENESS". Owner-configurable, same setter category as
-    /// setPriceFeed/batchSetPriceFeeds (W1 sc-oracle: "staleness window per feed rather
-    /// than one global 30 days").
+    /// setPriceFeed/batchSetPriceFeeds.
     mapping(address => uint256) public maxPriceStaleness;
 
     /// @dev List of all whitelisted tokens for enumeration
@@ -93,32 +93,24 @@ contract BucketInfo is Ownable2Step, Pausable {
     uint256 public constant MAX_PLATFORM_FEE = 1000;
 
     /// @dev Default Chainlink staleness window used when a token has no per-token override
-    /// (maxPriceStaleness[token] == 0). NO EXACT NUMBER WAS CLIENT-SPECIFIED for this --
-    /// see W1-SC1-ORACLE-REPORT.md `## Blocked`. 1 hour is a conservative default chosen to
-    /// match common Chainlink mainnet heartbeats for liquid pairs; it is owner-configurable
-    /// per token via setMaxPriceStaleness so a deployment can widen it for feeds with a
-    /// longer heartbeat without a code change.
+    /// (maxPriceStaleness[token] == 0). 1 hour is a conservative default chosen to match
+    /// common Chainlink mainnet heartbeats for liquid pairs; it is owner-configurable per
+    /// token via setMaxPriceStaleness so a deployment can widen it for feeds with a longer
+    /// heartbeat without a code change.
     uint256 public constant DEFAULT_MAX_PRICE_STALENESS = 1 hours;
 
-    /// @dev A1 (09-DECISION-LOG.md): maximum relative deviation allowed for a single
-    /// setTokenPrice/batchSetTokenPrices STEP, in basis points of the previous price
-    /// (2000 = 20%). Client-specified. This bounds each step, not the cumulative journey --
-    /// see W1-SC1-ORACLE-REPORT.md for the accepted-residual note on 24h compounding.
+    /// @dev Maximum relative deviation allowed for a single setTokenPrice/batchSetTokenPrices
+    /// STEP, in basis points of the previous price (2000 = 20%). This bounds each step, not
+    /// the cumulative journey over many steps.
     uint256 public constant MAX_PRICE_DEVIATION_BPS = 2000;
 
-    /// @dev A1: minimum interval between two manual price updates for the same token.
-    /// Client-specified.
+    /// @dev Minimum interval between two manual price updates for the same token.
     uint256 public constant MIN_PRICE_UPDATE_INTERVAL = 1 hours;
 
-    /// @dev W3.4: delay enforced between proposing and executing a platform-fee change, a
-    /// price-feed change, or a whitelist ADDITION on this contract. NO EXACT NUMBER WAS
-    /// CLIENT-SPECIFIED for BucketInfo's own setters -- the client's 48-hour figure
-    /// (`09-DECISION-LOG.md` §10.1) was given for the VAULT upgrade timelock, a different
-    /// setter. This reuses that figure as an Inferred default because the rug-pull shape is
-    /// identical (root CLAUDE.md §1.1's oracle-swap protection, and B5's "a newly whitelisted
-    /// token becomes swappable/depositable instantly") and because platform-wide consistency
-    /// is preferable to inventing a second, unexplained delay. Flagged for the client to
-    /// confirm or override -- see W3-SC-GOVERNANCE-REPORT.md `## Corrections to my briefing`.
+    /// @dev Delay enforced between proposing and executing a platform-fee change, a
+    /// price-feed change, or a whitelist addition on this contract. One platform-wide delay
+    /// so a newly whitelisted token (which becomes swappable/depositable instantly) and a
+    /// price feed change carry the same investor exit window as the vault upgrade timelock.
     uint256 public constant PLATFORM_SETTER_TIMELOCK_DELAY = 48 hours;
 
     /// @dev Native token (ETH) address representation
@@ -127,22 +119,21 @@ contract BucketInfo is Ownable2Step, Pausable {
     /// @dev Accumulated fees withdrawn by token address
     mapping(address => uint256) public accumulatedFeesWithdrawn;
 
-    /// @dev W3.4 timelock state: one pending platform-fee proposal (global, not per-token),
-    /// one pending price-feed proposal per token, one pending whitelist-addition proposal per
-    /// token. Whitelist-addition proposals have no meaningful "value" beyond the token address
-    /// itself (already the mapping key), so `pending` is set to the sentinel `1` purely to
-    /// distinguish "a proposal exists" from the zeroed default -- only `eta` carries real
-    /// timing information for this one.
+    /// @dev One pending platform-fee proposal (global, not per-token), one pending price-feed
+    /// proposal per token, one pending whitelist-addition proposal per token. Whitelist-addition
+    /// proposals have no meaningful "value" beyond the token address itself (already the mapping
+    /// key), so `pending` is set to the sentinel `1` purely to distinguish "a proposal exists"
+    /// from the zeroed default -- only `eta` carries real timing information for this one.
     TimelockedAdmin.UintTimelock private _platformFeeTimelock;
     mapping(address => TimelockedAdmin.AddressTimelock) private _priceFeedTimelocks;
     mapping(address => TimelockedAdmin.UintTimelock) private _whitelistAdditionTimelocks;
 
-    /// @dev W4.1 (D2): fail-closed compliance blacklist. Deliberately a single flat mapping
-    /// with an O(1) getter ({isBlacklisted}) -- no loop, no external call -- INV-7 requires this
-    /// getter be safe to call from every token contract's transfer hook on every deposit/
-    /// redeem/transfer. No enumeration array is kept here (unlike {whitelistedTokens}): nothing
-    /// in the plan requires walking "all blacklisted addresses" on-chain, and adding one would
-    /// be unbounded growth with no offsetting invariant.
+    /// @dev Fail-closed compliance blacklist. Deliberately a single flat mapping with an O(1)
+    /// getter ({isBlacklisted}) -- no loop, no external call -- since it must be safe to call
+    /// from every token contract's transfer hook on every deposit/redeem/transfer. No
+    /// enumeration array is kept here (unlike {whitelistedTokens}): nothing requires walking
+    /// "all blacklisted addresses" on-chain, and adding one would be unbounded growth with no
+    /// offsetting benefit.
     mapping(address => bool) private _blacklisted;
 
     /*//////////////////////////////////////////////////////////////
@@ -166,12 +157,11 @@ contract BucketInfo is Ownable2Step, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Propose adding `token` to the whitelist. W3.4 -- ADDITIONS are timelocked
-     * (B5): a newly-whitelisted token becomes swappable/depositable platform-wide the
-     * instant it lands, so investors get the same PLATFORM_SETTER_TIMELOCK_DELAY exit-aware
-     * window as a price feed or fee change. REMOVAL stays immediate ({removeTokenWhitelist})
-     * -- pulling a bad token out can never need to wait, and a delayed removal would leave a
-     * known-bad token live for the whole window it was supposed to protect against.
+     * @notice Propose adding `token` to the whitelist. Additions are timelocked: a
+     * newly-whitelisted token becomes swappable/depositable platform-wide the instant it
+     * lands, so investors get an exit-aware window, same as a price feed or fee change.
+     * Removal stays immediate ({removeTokenWhitelist}) -- pulling a bad token out can never
+     * need to wait.
      * @param token Address of the token (use address(0) for native ETH)
      */
     function proposeWhitelistAddition(address token) external onlyOwner {
@@ -198,8 +188,9 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /**
-     * @notice Remove `token` from the whitelist. Immediate, no timelock (B5) -- see
-     * {proposeWhitelistAddition}'s doc comment for why removal and addition are asymmetric.
+     * @notice Remove `token` from the whitelist. Immediate, no timelock -- pulling a bad token
+     * out can never need to wait, and a delayed removal would leave a known-bad token live for
+     * the whole window it was supposed to protect against.
      * @param token Address of the token (use address(0) for native ETH)
      */
     function removeTokenWhitelist(address token) external onlyOwner {
@@ -287,7 +278,7 @@ contract BucketInfo is Ownable2Step, Pausable {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @dev Manually set token price (in USD with 8 decimals). Subject to the A1 rate limit:
+     * @dev Manually set token price (in USD with 8 decimals). Subject to a rate limit:
      * the first-ever price set for a token is unbounded (emits TokenPriceInitialized);
      * every subsequent update must be within MAX_PRICE_DEVIATION_BPS of the previous price
      * and at least MIN_PRICE_UPDATE_INTERVAL after the previous update (emits
@@ -300,7 +291,7 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /**
-     * @dev Batch set token prices. Each (token, price) pair is subject to the same A1 rate
+     * @dev Batch set token prices. Each (token, price) pair is subject to the same rate
      * limit as setTokenPrice -- there is no bulk-update exemption, or the cap could be
      * bypassed by routing every update through this function instead.
      * @param tokens Array of token addresses
@@ -315,7 +306,7 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /**
-     * @dev Shared implementation for setTokenPrice/batchSetTokenPrices enforcing A1.
+     * @dev Shared implementation for setTokenPrice/batchSetTokenPrices enforcing the rate limit.
      * @param token Address of the token
      * @param price New price in USD (8 decimals)
      */
@@ -326,7 +317,7 @@ contract BucketInfo is Ownable2Step, Pausable {
         uint256 lastUpdate = priceUpdateTimestamps[token];
 
         if (lastUpdate == 0) {
-            // First-ever price for this token: unbounded by design (A1), but distinctly
+            // First-ever price for this token: unbounded by design, but distinctly
             // observable so an indexer can tell "initialized" apart from "updated".
             tokenPrices[token] = price;
             priceUpdateTimestamps[token] = block.timestamp;
@@ -351,11 +342,9 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /**
-     * @notice Propose a new Chainlink price feed for `token`. W3.4 -- same setter category
-     * as the oracle-swap protection at root CLAUDE.md §1.1 ("even contract owners should not
-     * able to change it" -- that line is about `updateBucketInfo`'s cross-contract case, but
-     * a price feed swap on THIS contract carries the identical rug-pull shape, so it gets the
-     * identical delay). Overwrites any existing proposal for this token.
+     * @notice Propose a new Chainlink price feed for `token`. A price feed swap carries a
+     * rug-pull shape identical to a whitelist addition or fee change, so it gets the same
+     * timelock. Overwrites any existing proposal for this token.
      * @param token Address of the token
      * @param priceFeed Address of the Chainlink price feed
      */
@@ -483,7 +472,7 @@ contract BucketInfo is Ownable2Step, Pausable {
      * available via tryGetTokenPrice (i.e. it is potentially outpriced / stale / invalid).
      * BucketInfo has no notion of which tokens any given vault holds, so this is
      * necessarily per-token, not per-vault -- a vault consuming this must OR the result
-     * across its held-token set. See W1-SC1-ORACLE-REPORT.md `## Corrections to my briefing`.
+     * across its held-token set.
      * @param token Address of the token
      * @return True if the token's price is currently unavailable/invalid
      */
@@ -605,9 +594,8 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /**
-     * @notice Propose a new platform fee. W3.4 -- platform fee is no longer settable in one
-     * step; it must clear PLATFORM_SETTER_TIMELOCK_DELAY before {executePlatformFee} can apply
-     * it. Overwrites any existing proposal (TimelockedAdmin.propose semantics).
+     * @notice Propose a new platform fee. Must clear {PLATFORM_SETTER_TIMELOCK_DELAY} before
+     * {executePlatformFee} can apply it. Overwrites any existing proposal.
      * @param newFee Fee in basis points (100 = 1%)
      */
     function proposePlatformFee(uint256 newFee) external onlyOwner {
@@ -712,34 +700,30 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /*//////////////////////////////////////////////////////////////
-                        GOVERNANCE (W3 — Q14.2)
+                        GOVERNANCE
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Thrown by {renounceOwnership}, which is always disabled. Q14.2
-    /// (`10-BLOCKER-14-DECOMPOSITION-ANSWER.md:6-7`): "If we want to make the contract ownerless,
-    /// we will change the owner into a DAO contract (not in scope yet)" -- `transferOwnership`
-    /// (inherited from `Ownable2Step`, two-step per Q14.5/D-3) stays the only route to a new
-    /// owner; renouncing is never that route.
+    /// @dev Thrown by {renounceOwnership}, which is always disabled -- if this contract is
+    /// ever to become ownerless, ownership would move to a DAO contract via
+    /// `transferOwnership`, not via renunciation.
     error RenounceOwnershipDisabled();
 
-    /// @notice Always reverts. Universal across every contract in this system that has an
-    /// ownership base (root CLAUDE.md §8, Q14.2) -- `BucketInfo` must never become ownerless via
-    /// renunciation.
+    /// @notice Always reverts -- ownership must always be transferable, never abandoned, since
+    /// `transferOwnership` (two-step, via `Ownable2Step`) is the only route to a new owner.
     function renounceOwnership() public override {
         revert RenounceOwnershipDisabled();
     }
 
     /*//////////////////////////////////////////////////////////////
-                    COMPLIANCE -- BLACKLIST (W4.1, D2)
+                        COMPLIANCE -- BLACKLIST
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Whether `account` is blacklisted. INV-7: pure storage read, no external call, no
-    /// loop, no oracle -- every token contract's transfer hook (W4.2) calls this on every
+    /// @notice Whether `account` is blacklisted. A pure storage read, no external call, no
+    /// loop, no oracle -- every token contract's transfer hook calls this on every
     /// deposit/redeem/transfer, so it must stay O(1) and revert-free by construction.
-    /// @dev Client requirement (`00-EXECUTIVE-SUMMARY-USER-REPLY.md:19`): "Addresses on the
-    /// blacklist will not able to do anything with any contract in this project, no matter
-    /// deposit, withdraw, rebalance, or even transferring the contract tokens." This getter is
-    /// the single source of truth every contract in the system checks to honour that.
+    /// @dev The single source of truth every contract in the system checks: addresses on the
+    /// blacklist must not be able to do anything with any contract in this project, no matter
+    /// deposit, withdraw, rebalance, or even transferring the contract tokens.
     /// @param account The address to check.
     /// @return True if `account` is currently blacklisted.
     function isBlacklisted(address account) external view returns (bool) {
@@ -747,13 +731,10 @@ contract BucketInfo is Ownable2Step, Pausable {
     }
 
     /// @notice Add `account` to the compliance blacklist. Immediate -- no timelock, by design:
-    /// mirrors {removeTokenWhitelist}'s own "removal is immediate" rationale (a delayed freeze
-    /// would let a bad actor act before it takes effect), and here the immediate action IS the
-    /// freeze itself.
-    /// @dev Inferred design choice: gated on this contract's own `onlyOwner`, i.e. the platform,
-    /// never a vault's own owner (a customer) -- root CLAUDE.md §1.1's precedent that
-    /// compliance/oracle-shaped powers stay with the platform, not the tenant. Flagged for the
-    /// client to confirm; see this wave's report `## Corrections to my briefing`.
+    /// a delayed freeze would let a bad actor act before it takes effect, so the immediate
+    /// action IS the freeze itself.
+    /// @dev Gated on this contract's own `onlyOwner`, i.e. the platform, never a vault's own
+    /// owner (a customer).
     function blacklistAddress(address account) external onlyOwner {
         require(account != address(0), "Invalid address");
         require(!_blacklisted[account], "Already in desired state");

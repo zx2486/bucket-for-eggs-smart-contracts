@@ -17,9 +17,8 @@ contract PureMembershipFactory {
     address public immutable implementation;
 
     /// @notice The BucketInfo contract every proxy deployed through this factory is wired to.
-    /// @dev W1.7: constructor-set-and-immutable, never caller-supplied. See the identical doc
-    /// comment on `ActiveBucketFactory.bucketInfo` for the full rationale (workspace CLAUDE.md
-    /// §1.1 precondition under the ownership table).
+    /// @dev Constructor-set and immutable, never caller-supplied — this guarantees every vault
+    /// from this factory points at a genuine, platform-approved BucketInfo instance.
     address public immutable bucketInfo;
 
     /// @notice All proxy addresses deployed through this factory
@@ -52,8 +51,8 @@ contract PureMembershipFactory {
      * @dev The caller becomes the owner of the new contract.  All membership
      * configuration is set at construction time; additional configs can be
      * added later by the owner through `addMembershipConfig`.
-     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is no longer a
-     * caller-supplied parameter (W1.7; see the doc comment on {bucketInfo}).
+     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is not a
+     * caller-supplied parameter.
      * @param configs Initial membership tier configurations
      * @param uri     ERC-1155 metadata URI (e.g. "https://api.example.com/metadata/{id}.json")
      * @return proxy Address of the newly deployed PureMembership proxy
@@ -63,8 +62,7 @@ contract PureMembershipFactory {
         returns (address payable proxy)
     {
         // Encode the initializer call using the factory's own immutable bucketInfo, never a
-        // caller-supplied value. Arity unchanged from before this fix (3 args) -- only the
-        // source of the bucketInfo argument's value changed.
+        // caller-supplied value.
         bytes memory initData = abi.encodeCall(PureMembership.initialize, (configs, bucketInfo, uri));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation

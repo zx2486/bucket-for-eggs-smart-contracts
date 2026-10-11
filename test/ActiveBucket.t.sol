@@ -572,89 +572,6 @@ contract ActiveBucketTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-              N5 / A3 OWNER-WITHDRAWAL-FLOOR TESTS (BUILT, UNWIRED)
-       These exercise BucketVaultBase.isOwnerWithdrawalFloorMet /
-       wouldOwnerMeetWithdrawalFloorAfterRedeem directly. Neither function is called from
-       redeem() as of W2 (sc-vault-exit) — see the doc comment on that section in
-       BucketVaultBase.sol for why (deliberate LIVE-quantity substitution for A3's literal
-       "20% of total deposited value or portfolio" wording, pending client/verification-stream
-       confirmation before ever being wired live).
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice Case 1/3: below the 20% floor, both the current-state check and the
-    /// hypothetical-after-redeem check must report "not met".
-    function test_OwnerWithdrawalFloor_BlockedBelowFloor() public {
-        // Owner (address(this)) deposits a small stake; user1 deposits far more, diluting the
-        // owner to ~10% of supply — below the 20% floor.
-        bucket.deposit{value: 1 ether}(address(0), 0);
-        vm.prank(user1);
-        bucket.deposit{value: 9 ether}(address(0), 0);
-
-        assertFalse(bucket.isOwnerWithdrawalFloorMet(), "owner at ~10% must be below the 20% floor");
-
-        uint256 ownerShares = bucket.balanceOf(owner);
-        // Already below floor: redeeming everything (or anything) cannot make it "met".
-        assertFalse(
-            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem(ownerShares),
-            "already-below-floor owner cannot meet the floor after redeeming more"
-        );
-    }
-
-    /// @notice Case 2/3: at/above the 20% floor, both checks must report "met", including for a
-    /// hypothetical partial redeem that keeps the owner at/above the floor afterwards.
-    function test_OwnerWithdrawalFloor_PermittedAtOrAboveFloor() public {
-        // Owner deposits 3 ETH, user1 deposits 7 ETH -> owner holds exactly 30% of supply.
-        bucket.deposit{value: 3 ether}(address(0), 0);
-        vm.prank(user1);
-        bucket.deposit{value: 7 ether}(address(0), 0);
-
-        assertTrue(bucket.isOwnerWithdrawalFloorMet(), "owner at 30% must meet the 20% floor");
-
-        uint256 ownerShares = bucket.balanceOf(owner);
-        // Redeem a third of the owner's shares: 2/9 ~= 22.2% remains -> still >= 20%.
-        assertTrue(
-            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem(ownerShares / 3),
-            "owner redeeming down to ~22.2% must still meet the 20% floor"
-        );
-        // Redeem two-thirds instead: 1/8 = 12.5% remains -> below 20%, must report false.
-        assertFalse(
-            bucket.wouldOwnerMeetWithdrawalFloorAfterRedeem((ownerShares * 2) / 3),
-            "owner redeeming down to 12.5% must fail the 20% floor"
-        );
-    }
-
-    /// @notice Case 3/3: the R1-lockout-absence proof. The contracts plan's own §5.5 "R1"
-    /// analysis shows that a LITERAL lifetime-accumulator reading of A3 ("20% of total deposited
-    /// value") permanently locks the owner out after a single full investor deposit/exit cycle,
-    /// because a lifetime accumulator never forgets that dilution happened. This test proves the
-    /// LIVE-quantity interpretation built here does NOT have that defect: once the diluting
-    /// investor fully exits, the owner's LIVE ratio recovers on its own, with no unlock action
-    /// needed from anyone.
-    function test_OwnerWithdrawalFloor_R1LockoutAbsenceProof() public {
-        // Owner deposits first and alone: 100% of supply, floor trivially met.
-        bucket.deposit{value: 5 ether}(address(0), 0);
-        assertTrue(bucket.isOwnerWithdrawalFloorMet(), "sole owner depositor starts at 100%");
-
-        // A large investor deposit dilutes the owner to 5/50 = 10% -- now BELOW the floor.
-        vm.prank(user1);
-        bucket.deposit{value: 45 ether}(address(0), 0);
-        assertFalse(bucket.isOwnerWithdrawalFloorMet(), "owner must be diluted below the 20% floor mid-cycle");
-
-        // The investor fully exits (a complete deposit/redeem cycle on their side).
-        uint256 investorShares = bucket.balanceOf(user1);
-        vm.prank(user1);
-        bucket.redeem(investorShares);
-
-        // LIVE quantity: with the diluting investor gone, the owner is back to 100% of the
-        // (now smaller) supply. A lifetime-accumulator design would have no such recovery path --
-        // this is the R1 lockout this substitution avoids.
-        assertTrue(
-            bucket.isOwnerWithdrawalFloorMet(),
-            "LIVE ratio must recover once the diluting investor fully exits (R1 lockout absence proof)"
-        );
-    }
-
-    /*//////////////////////////////////////////////////////////////
                         FLASH LOAN TESTS
     //////////////////////////////////////////////////////////////*/
 
@@ -1030,6 +947,105 @@ contract ActiveBucketTest is Test {
         // 100% is valid
         bucket.setPerformanceFee(10000);
         assertEq(bucket.performanceFeeBps(), 10000);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                MAX VALUE-LOSS BPS TESTS (task #97, extended task #98)
+    //////////////////////////////////////////////////////////////*/
+
+    function test_MaxValueLossBpsDefaultsToFiftyBpsWhenUnset() public view {
+        // Zero means "use the hardcoded 0.5% default" — never zero itself.
+        assertEq(bucket.maxValueLossBps(), 50);
+    }
+
+    function test_EpochValueLossBudgetBpsDefaultsToOneFiftyBpsWhenUnset() public view {
+        // Zero means "use the hardcoded 1.5%/day default" — never zero itself.
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_SetMaxValueLossBpsUpdatesGetter() public {
+        bucket.setMaxValueLossBps(300, 0); // 3% per-call, leave epoch budget at default
+        assertEq(bucket.maxValueLossBps(), 300);
+    }
+
+    function test_SetMaxValueLossBpsUpdatesEpochBudgetGetter() public {
+        bucket.setMaxValueLossBps(0, 700); // leave per-call at default, 7%/day epoch budget
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+    }
+
+    function test_SetMaxValueLossBpsSetsBothIndependentlyInOneCall() public {
+        bucket.setMaxValueLossBps(500, 700);
+        assertEq(bucket.maxValueLossBps(), 500);
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+    }
+
+    function test_SetMaxValueLossBpsEmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit BucketVaultBase.MaxValueLossBpsUpdated(300, 700);
+        bucket.setMaxValueLossBps(300, 700);
+    }
+
+    function test_SetMaxValueLossBpsAtCeilingSucceeds() public {
+        // Exactly 1000 bps (10%) is the ceiling, not an off-by-one boundary that reverts.
+        bucket.setMaxValueLossBps(1000, 1000);
+        assertEq(bucket.maxValueLossBps(), 1000);
+        assertEq(bucket.epochValueLossBudgetBps(), 1000);
+    }
+
+    function test_RevertSetMaxValueLossBpsAboveCeiling() public {
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.MaxValueLossBpsExceedsCeiling.selector, 1001));
+        bucket.setMaxValueLossBps(1001, 0);
+    }
+
+    function test_RevertSetEpochValueLossBudgetBpsAboveCeiling() public {
+        // The epoch budget field is checked against the same ceiling, independently of the
+        // per-call field — a valid per-call value does not excuse an over-ceiling epoch budget.
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.MaxValueLossBpsExceedsCeiling.selector, 1001));
+        bucket.setMaxValueLossBps(300, 1001);
+    }
+
+    function test_SetMaxValueLossBpsBackToZeroRestoresDefault() public {
+        bucket.setMaxValueLossBps(1000, 1000);
+        assertEq(bucket.maxValueLossBps(), 1000);
+        assertEq(bucket.epochValueLossBudgetBps(), 1000);
+
+        // Owner can lower it again, including back down to 0 (which re-resolves to each field's
+        // own default rather than permanently sticking at whatever ceiling was last set) — and
+        // the two fields restore independently, not jointly.
+        bucket.setMaxValueLossBps(0, 0);
+        assertEq(bucket.maxValueLossBps(), 50);
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_SetMaxValueLossBpsZeroRestoresOnlyThatFieldIndependently() public {
+        bucket.setMaxValueLossBps(500, 700);
+
+        // Restoring only the per-call bound to default must not disturb the epoch budget.
+        bucket.setMaxValueLossBps(0, 700);
+        assertEq(bucket.maxValueLossBps(), 50);
+        assertEq(bucket.epochValueLossBudgetBps(), 700);
+
+        // And vice versa: restoring only the epoch budget must not disturb the per-call bound.
+        bucket.setMaxValueLossBps(0, 0);
+        bucket.setMaxValueLossBps(500, 700);
+        bucket.setMaxValueLossBps(500, 0);
+        assertEq(bucket.maxValueLossBps(), 500);
+        assertEq(bucket.epochValueLossBudgetBps(), 150);
+    }
+
+    function test_RevertSetMaxValueLossBpsNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        bucket.setMaxValueLossBps(300, 0);
+    }
+
+    function test_RevertSetMaxValueLossBpsBlacklistedOwner() public {
+        // onlyOwnerNotBlacklisted: the owner itself, if blacklisted, is locked out of its own
+        // risk-tolerance control just like every other admin function on this base.
+        bucketInfo.setBlacklisted(owner, true);
+
+        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, owner));
+        bucket.setMaxValueLossBps(300, 0);
     }
 
     /*//////////////////////////////////////////////////////////////

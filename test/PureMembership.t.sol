@@ -858,35 +858,7 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
     }
 
-    function test_BuyMembershipWithinUserCap() public {
-        // No owner cap set; user supplies a per-call cap >= the real cost.
-        uint256 expectedPayment = 10e6;
-
-        vm.startPrank(user1);
-        payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment);
-        vm.stopPrank();
-
-        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
-    }
-
-    function test_RevertBuyMembershipExceedsUserCap() public {
-        // No owner cap set; user supplies a per-call cap below the real cost.
-        uint256 expectedPayment = 10e6;
-
-        vm.startPrank(user1);
-        payToken.approve(address(membership), expectedPayment);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
-            )
-        );
-        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment - 1);
-        vm.stopPrank();
-    }
-
-    function test_BuyMembershipUserCapZeroMeansUnlimited() public {
-        // maxPay == 0 imposes no user-side restriction, independent of price.
+    function test_BuyMembershipPaySectionZeroDefaultsToOne() public {
         uint256 expectedPayment = 10e6;
 
         vm.startPrank(user1);
@@ -894,14 +866,77 @@ contract PureMembershipTest is Test {
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
-        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
+        assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
     }
 
-    /// @notice Composition is min(ownerCap, userCap). Owner cap is generous (would allow
-    /// the purchase) but the user's per-call cap is stricter and must be the one that binds.
-    function test_BuyMembershipComposesMinWhenUserCapIsStricter() public {
+    function test_BuyMembershipOmittedPaySectionDefaultsToOne() public {
         uint256 expectedPayment = 10e6;
-        membership.setMaxPaymentAmount(expectedPayment * 10); // owner cap is not the limiter
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken));
+        vm.stopPrank();
+
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
+        assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
+    }
+
+    function test_BuyMembershipMultiplePaySections() public {
+        uint256 paySections = 3;
+        uint256 expectedPayment = 10e6 * paySections;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), paySections);
+        vm.stopPrank();
+
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION * paySections);
+        assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
+    }
+
+    function test_BuyMembershipExistingCallWithThirdArgumentZeroDefaultsToOne() public {
+        uint256 expectedPayment = 10e6;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), 0);
+        vm.stopPrank();
+
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
+        assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
+    }
+
+    function test_BuyMembershipMultiplePaySectionsWithETH() public {
+        uint256 paySections = 2;
+        uint256 expectedPayment = 5e15 * paySections;
+        uint256 ethBefore = user1.balance;
+
+        vm.prank(user1);
+        membership.buyMembership{value: expectedPayment}(BASIC_ID, address(0), paySections);
+
+        assertEq(user1.balance, ethBefore - expectedPayment);
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION * paySections);
+        assertEq(membership.revenueByToken(address(0)), expectedPayment);
+    }
+
+    function test_RenewMembershipMultiplePaySections() public {
+        uint256 expectedPayment = 10e6 * 4;
+
+        vm.startPrank(user1);
+        payToken.approve(address(membership), expectedPayment);
+        membership.buyMembership(BASIC_ID, address(payToken), 1);
+        uint256 firstExpiry = membership.membershipExpiry(user1, BASIC_ID);
+        membership.buyMembership(BASIC_ID, address(payToken), 3);
+        vm.stopPrank();
+
+        assertEq(membership.membershipExpiry(user1, BASIC_ID), firstExpiry + BASIC_DURATION * 3);
+        assertEq(membership.revenueByToken(address(payToken)), expectedPayment);
+    }
+
+    function test_OwnerCapAppliesToTotalPaySectionAmount() public {
+        uint256 expectedPayment = 20e6;
+        membership.setMaxPaymentAmount(expectedPayment - 1);
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
@@ -910,37 +945,8 @@ contract PureMembershipTest is Test {
                 PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
             )
         );
-        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment - 1);
+        membership.buyMembership(BASIC_ID, address(payToken), 2);
         vm.stopPrank();
-    }
-
-    /// @notice Same composition, opposite direction: user cap is generous but the owner's
-    /// cap is stricter and must be the one that binds.
-    function test_BuyMembershipComposesMinWhenOwnerCapIsStricter() public {
-        uint256 expectedPayment = 10e6;
-        membership.setMaxPaymentAmount(expectedPayment - 1); // owner cap is the limiter
-
-        vm.startPrank(user1);
-        payToken.approve(address(membership), expectedPayment);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PureMembership.PaymentExceedsMaxAmount.selector, expectedPayment, expectedPayment - 1
-            )
-        );
-        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment * 10);
-        vm.stopPrank();
-    }
-
-    function test_BuyMembershipSucceedsWhenBothCapsSatisfied() public {
-        uint256 expectedPayment = 10e6;
-        membership.setMaxPaymentAmount(expectedPayment);
-
-        vm.startPrank(user1);
-        payToken.approve(address(membership), expectedPayment);
-        membership.buyMembership(BASIC_ID, address(payToken), expectedPayment);
-        vm.stopPrank();
-
-        assertEq(membership.balanceOf(user1, BASIC_ID), 1);
     }
 
     /*//////////////////////////////////////////////////////////////

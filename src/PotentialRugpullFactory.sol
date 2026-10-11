@@ -6,24 +6,21 @@ import {PotentialRugpull} from "./PotentialRugpull.sol";
 /**
  * @title PotentialRugpullFactory
  * @author Bucket-for-Eggs Team
- * @notice Factory contract to deploy `PotentialRugpull` instances (W5.1, SC-8, task #63).
+ * @notice Factory contract to deploy `PotentialRugpull` instances.
  * @dev Deliberately DOES NOT follow the `ERC1967Proxy` + `initialize()` pattern the other three
  * factories ({ActiveBucketFactory}, {PassiveBucketFactory}, {PureMembershipFactory}) use.
- * `PotentialRugpull` is a plain, non-upgradeable contract — see `PotentialRugpull.sol`'s
- * DECISION 1 header comment for the full rationale (the client's literal "constructor will only
- * take one variable" constraint, corroborated by `IImplementationRegistry.Kind` excluding
- * `PotentialRugpull` from the three-member enum that drives the platform's upgrade-whitelist
- * machinery). This factory instead deploys via a direct `new PotentialRugpull(cashRatio_)` call,
+ * `PotentialRugpull` is a plain, non-upgradeable contract whose constructor takes only one
+ * variable (its protection ratio) — see `PotentialRugpull.sol`'s header comment for the full
+ * rationale. This factory instead deploys via a direct `new PotentialRugpull(cashRatio_)` call,
  * then immediately calls the freshly-deployed instance's one-shot, factory-only
- * `initialize(bucketInfo_, owner_, name_, symbol_)` in the SAME transaction — the
- * deferred-parameter pattern `PotentialRugpull.sol` documents in full.
- * @dev `bucketInfo` is this factory's own constructor-set-and-immutable value, mirroring W1.7's
- * fix on the other three factories (root CLAUDE.md §1.1's precondition: the vault's `BucketInfo`
- * pointer must never be caller-suppliable, or a customer could point their vault at a
- * `BucketInfo`-shaped contract they control). `PotentialRugpull`'s own constructor could not
- * carry this value directly (the one-variable constraint), which is exactly why the deferred
- * `initialize` call exists — and this factory supplies that value from ITS OWN immutable, never
- * from anything the `createPotentialRugpull` caller passes in.
+ * `initialize(bucketInfo_, owner_, name_, symbol_)` in the SAME transaction.
+ * @dev `bucketInfo` is this factory's own constructor-set-and-immutable value, mirroring the
+ * other three factories: the vault's `BucketInfo` pointer must never be caller-suppliable, or a
+ * customer could point their vault at a `BucketInfo`-shaped contract they control.
+ * `PotentialRugpull`'s own constructor cannot carry this value directly (its one-variable
+ * constraint), which is why the deferred `initialize` call exists — and this factory supplies
+ * that value from its own immutable, never from anything the `createPotentialRugpull` caller
+ * passes in.
  */
 contract PotentialRugpullFactory {
     /// @notice The BucketInfo contract every PotentialRugpull deployed through this factory is

@@ -17,9 +17,8 @@ contract PassiveBucketFactory {
     address public immutable implementation;
 
     /// @notice The BucketInfo contract every proxy deployed through this factory is wired to.
-    /// @dev W1.7: constructor-set-and-immutable, never caller-supplied. See the identical doc
-    /// comment on `ActiveBucketFactory.bucketInfo` for the full rationale (workspace CLAUDE.md
-    /// §1.1 precondition under the ownership table).
+    /// @dev Constructor-set and immutable, never caller-supplied — this guarantees every vault
+    /// from this factory points at a genuine, platform-approved BucketInfo instance.
     address public immutable bucketInfo;
 
     /// @notice All proxy addresses deployed through this factory
@@ -50,8 +49,8 @@ contract PassiveBucketFactory {
      * @notice Deploy a new PassiveBucket proxy and initialise it
      * @dev The caller becomes the owner of the new contract. Distributions,
      * DEX configs, and WETH can be configured after deployment by the owner.
-     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is no longer a
-     * caller-supplied parameter (W1.7; see the doc comment on {bucketInfo}).
+     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is not a
+     * caller-supplied parameter.
      * @param distributions    Initial token distributions (weights must sum to 100)
      * @param oneInchRouter    Address of the 1inch aggregation router
      * @param name             ERC-20 token name for the share token

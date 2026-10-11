@@ -16,18 +16,12 @@ import {FactoryAuthLib} from "./libraries/FactoryAuthLib.sol";
  * weight distributions. Users deposit tokens to receive shares and redeem shares to receive
  * proportional underlying tokens. Rebalancing aligns actual holdings with target distribution.
  * @dev Uses UUPS proxy pattern. Integrates with BucketInfo for token validation and pricing,
- * and with DEX routers (Uniswap V3 style + 1inch) for rebalancing.
- * W1 (sc-refactor-base): inherits shared deposit-accounting/value/oracle-consumption logic from
- * {BucketVaultBase}. All state variables below stay declared here, at their pre-refactor linear
- * slots — none were moved into the base contract. See W1-SCR-REFACTOR-REPORT.md.
- * W3 (size-reduction): the `ISwapRouter`/`IQuoter`/`IWETH` interfaces and the `DexConfig` struct
- * that used to be declared directly in this file now live in `libraries/DexSwapLib.sol`, along
- * with the Uniswap-best-quote-and-swap logic itself (formerly `_executeBestSwap`, now
- * `DexSwapLib.executeBestSwap`) and the sell-to-WETH/buy-from-WETH trade-execution block from
- * `rebalanceByDefi` (now `DexSwapLib.executeRebalanceTrades`) — both called via a library
- * DELEGATECALL, moved out purely to bring this contract's own runtime bytecode back under the
- * EIP-170 24,576-byte limit. See `DexSwapLib.sol`'s doc comment for the full rationale and why
- * this is a pure bytecode-location change, not a behavior change.
+ * and with DEX routers (Uniswap V3 style + 1inch) for rebalancing. Inherits shared
+ * deposit-accounting/value/oracle-consumption logic from {BucketVaultBase}; all state variables
+ * below stay declared here, at their original linear slots. The Uniswap best-quote-and-swap
+ * logic and the sell-to-WETH/buy-from-WETH trade-execution block used by `rebalanceByDefi` live
+ * in `libraries/DexSwapLib.sol` and are reached via a library delegatecall, keeping this
+ * contract's own runtime bytecode under the EIP-170 size limit.
  */
 contract PassiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
@@ -68,8 +62,7 @@ contract PassiveBucket is BucketVaultBase {
     uint256 public totalDepositValue;
 
     /// @notice Total withdrawn value in USD (8 decimals)
-    /// @dev W2 (sc-vault-exit): no longer incremented by `redeem()` — same rationale as
-    /// ActiveBucket.sol's identical state variable. See BucketVaultBase.sol's `Redeemed` event
+    /// @dev No longer incremented by `redeem()`; see `BucketVaultBase.sol`'s `Redeemed` event
     /// doc comment for the off-chain replacement.
     uint256 public totalWithdrawValue;
 
@@ -92,10 +85,8 @@ contract PassiveBucket is BucketVaultBase {
     uint256 public constant DISTRIBUTION_TOLERANCE = 2;
 
     /// @notice The platform-owned {ImplementationRegistry} this vault's upgrades are checked
-    /// against. W3.3 (`09-DECISION-LOG.md` §10.1): `immutable`, constructor-set, never
-    /// repointable — mirrors why {bucketInfo}'s repoint path requires the CURRENT BucketInfo
-    /// owner's sign-off, not this vault owner's alone; the whitelist authority itself must not
-    /// be swappable by this vault's (customer) owner.
+    /// against. Immutable and constructor-set, never repointable — the whitelist authority
+    /// itself must not be swappable by this vault's (customer) owner.
     IImplementationRegistry public immutable REGISTRY;
 
     /*//////////////////////////////////////////////////////////////
@@ -124,23 +115,14 @@ contract PassiveBucket is BucketVaultBase {
     error WeightSumMismatch(uint256 totalWeight);
     error DuplicateToken(address token);
     error EmptyDistributions();
-    /// @dev W5 (sc-stable-exit, task #64): MOVED to {BucketVaultBase}'s shared-errors block —
-    /// `redeemForStable()` applies this same owner-accountability guard to BOTH vault types (see
-    /// that function's doc comment for why), so the error now lives where the check lives.
-    /// Deleted here, not duplicated — a second `error OwnerNotAccountable();` declaration in this
-    /// contract would be a DeclarationError (same selector, now already visible via inheritance).
-    /// `PassiveBucket.OwnerNotAccountable.selector` (used throughout this file and in
-    /// `test/PassiveBucket.t.sol`) is unchanged by the move — Solidity resolves an inherited
-    /// error through the derived contract's own name exactly like an inherited function.
-    /// @dev W3 size-reduction: was `DistributionMismatch(address,uint256,uint256)`; narrowed to
-    /// zero-arg once `_verifyDistribution` stopped running its own copy of the tolerance-check
-    /// loop (see the doc comment on that function) — nothing in `test/` or `script/` asserts on
-    /// the removed fields (verified: zero hits for `DistributionMismatch` outside this file).
+    /// @dev `OwnerNotAccountable` lives in {BucketVaultBase}'s shared-errors block since
+    /// `redeemForStable()` applies the same owner-accountability guard to both vault types; the
+    /// selector is unchanged, resolved here by inheritance.
+    /// @dev Narrowed to zero-arg since `_verifyDistribution`'s tolerance check doesn't carry
+    /// per-token detail into the revert.
     error DistributionMismatch();
-    /// @dev W3 size-reduction: replaces three `require(..., "string")` reverts (`setRebalanceFees`,
-    /// `_handleRebalanceFees`) with custom errors — a require's string literal is encoded into
-    /// PassiveBucket's own runtime bytecode at every call site, whereas a custom error's selector
-    /// is 4 bytes. Same revert conditions, same call sites, no behavior change.
+    /// @dev Custom error in place of a `require(..., "string")` — same revert conditions, same
+    /// call sites, smaller bytecode.
     error FeesExceed100Percent();
     error InvalidPriceAfterRebalance();
     error PriceDeviationTooHigh();
@@ -151,17 +133,9 @@ contract PassiveBucket is BucketVaultBase {
 
     /// @notice Ensures owner holds >= `MIN_OWNER_BPS` (currently 1%) of total supply; reverts
     /// owner-only calls otherwise
-    /// @dev Verifier fix (2026-10-04): also blocks a blacklisted owner -- an admin call by a
-    /// blacklisted owner, same gap class covered by {BucketVaultBase.whenCallerNotBlacklisted}.
-    /// Folded into this modifier (rather than added separately at each of its four call sites)
-    /// since every caller of `onlyAccountableOwner` is already `msg.sender == owner()` by the
-    /// time this runs.
-    /// @dev Verifier fix (2026-10-04) follow-up: collapses the owner+blacklist half of this
-    /// modifier into {BucketVaultBase._checkOwnerNotBlacklisted} (one internal-call `JUMP`
-    /// instead of two) — same measured size-relief technique as `onlyOwnerNotBlacklisted`'s own
-    /// correction comment explains. Accountability stays a separate, third check layered on top,
-    /// since it is NOT part of the shared base modifier (that modifier is used by callers that
-    /// must NOT additionally require accountability, e.g. `unpause()`).
+    /// @dev Also blocks a blacklisted owner from using an owner-only call. Accountability is a
+    /// separate, third check layered on top of the shared base owner/blacklist check, since some
+    /// callers (e.g. `unpause()`) must NOT additionally require accountability.
     modifier onlyAccountableOwner() {
         _checkOwnerNotBlacklisted();
         if (!isBucketAccountable()) revert OwnerNotAccountable();
@@ -174,10 +148,7 @@ contract PassiveBucket is BucketVaultBase {
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
-    /// implementations against. W3.3: baked in as an immutable constructor parameter, never
-    /// threaded through `initialize`, following the same "factory-immutable" precedent as
-    /// {implementation}/{bucketInfo} on the factory itself (root CLAUDE.md §1.1, W1.7) — so the
-    /// factory needs zero changes to supply it (`09-DECISION-LOG.md` §11.2 / D-3).
+    /// implementations against. Set once at construction and never repointable.
     constructor(address registry_) {
         if (registry_ == address(0)) revert ZeroAddress();
         REGISTRY = IImplementationRegistry(registry_);
@@ -201,14 +172,12 @@ contract PassiveBucket is BucketVaultBase {
         string memory name,
         string memory symbol
     ) external initializer {
-        // Task #33 (W1.7 direct-proxy-bypass fix): only a platform-authorized factory may
-        // initialize a proxy against this implementation. See the identical check in
-        // ActiveBucket.sol's `initialize()` for the full rationale. Routed through
-        // {FactoryAuthLib} rather than inlined (EIP-170 size relief, task #75) -- the revert
-        // data is byte-identical to the inline form, see that library's doc comment.
+        // Only a platform-authorized factory may initialize a proxy against this
+        // implementation, preventing a direct `ERC1967Proxy` deploy from bypassing the factory.
+        // Routed through {FactoryAuthLib} for bytecode-size relief; revert data is unchanged.
         FactoryAuthLib.requireAuthorizedFactory(REGISTRY, msg.sender);
-        if (bucketInfoAddr == address(0)) revert ZeroAddress();
-        if (oneInchRouterAddr == address(0)) revert ZeroAddress();
+        _requireNonZero(bucketInfoAddr);
+        _requireNonZero(oneInchRouterAddr);
 
         __ERC20_init(name, symbol);
         __ERC20Burnable_init();
@@ -230,42 +199,18 @@ contract PassiveBucket is BucketVaultBase {
                         DEPOSIT / REDEEM
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @notice Deposit a whitelisted token and receive share tokens
-     * @dev For ETH deposits, send value with msg.value and set token to address(0).
-     *      For ERC-20, approve this contract first.
-     *      W2 (sc-vault-entry): mints against the vault's LIVE NAV
-     *      (`_calculateTotalValue()`/`totalSupply()`), not the stale `tokenPrice` state
-     *      variable — see `BucketVaultBase._processDeposit`'s doc comment. `tokenPrice` is now
-     *      kept continuously live-synced on every deposit (not just on rebalance) as a side
-     *      effect.
-     * @param token The token address (address(0) for ETH)
-     * @param amount The amount to deposit (ignored for ETH; msg.value is used)
-     */
-    function deposit(address token, uint256 amount)
-        external
-        payable
-        nonReentrant
-        whenNotPaused
-        whenPlatformOperational
-    {
-        (uint256 actualAmount, uint256 sharesToMint, uint256 depositValue, uint256 newSharePrice) =
-            _processDeposit(token, amount);
-
+    /// @dev `deposit()` itself is shared verbatim from {BucketVaultBase}; this just writes the
+    /// result into this contract's own `totalDepositValue` / `tokenPrice` storage.
+    function _recordDeposit(uint256 depositValue, uint256 newSharePrice) internal override {
         totalDepositValue += depositValue;
         tokenPrice = newSharePrice;
-
-        emit Deposited(msg.sender, token, actualAmount, sharesToMint, depositValue);
     }
 
     /**
      * @notice Redeem shares for proportional underlying tokens from the distribution
-     * @dev Owner can only redeem if isBucketAccountable is true before and after (unchanged by
-     * W2 — this is a SEPARATE, pre-existing `MIN_OWNER_BPS` guard (currently 1%) local to
-     * PassiveBucket, not the new, deliberately unwired 20% N5/A3 floor built in BucketVaultBase
-     * this wave; see BucketVaultBase.isOwnerWithdrawalFloorMet's doc comment).
-     *      W2 (sc-vault-exit): returns tokens the vault actually holds (the held-tokens
-     *      registry), not `_bucketDistributions` — see the in-function comment below.
+     * @dev Owner can only redeem if isBucketAccountable is true before and after, keeping the
+     * owner above the minimum ownership floor. Returns tokens the vault actually holds (the
+     * held-tokens registry), not the configured target distribution.
      * @param shares The number of share tokens to redeem
      */
     function redeem(uint256 shares) external nonReentrant whenNotPaused whenPlatformOperational {
@@ -273,55 +218,29 @@ contract PassiveBucket is BucketVaultBase {
             revert InvalidRedeemAmount();
         }
 
-        // Owner accountability check (before) — unchanged by W2.
+        // Owner accountability check (before).
         bool isOwnerCaller = (msg.sender == owner());
-        if (isOwnerCaller) {
-            if (!isBucketAccountable()) revert OwnerNotAccountable();
-        }
+        _checkOwnerAccountable(isOwnerCaller);
 
-        // W3 (size-reduction, task #48): tokens/returnAmounts used to be computed by an inline
-        // "enumerate held tokens, compute balance*shares/supply per token, track anyPayout"
-        // loop here — byte-for-byte the same loop {BucketVaultBase._previewRedeemCore} already
-        // runs for `previewRedeem` (same held-tokens enumeration via `_heldTokensList()`, same
-        // per-token `_getTokenBalance(tokens[i]) * shares / supply` arithmetic, same dead
-        // zero-supply `InvalidRedeemAmount` guard, same all-zero-payout `NothingToRedeem`
-        // guard). `_previewRedeemCore` is `internal` and already compiled into this contract's
-        // own runtime bytecode (it backs the external `previewRedeem`), so calling it here
-        // removes a second, near-identical copy of that loop from PassiveBucket's OWN bytecode
-        // without changing any output — same reverts, same values. The `shares == 0 || shares
-        // > balanceOf(msg.sender)` check above is deliberately kept here (rather than deleted
-        // and left solely to `_previewRedeemCore`'s own copy of the identical check) so this
-        // function's own check ORDER is unchanged versus the pre-refactor inline code:
-        // shares-validity, THEN owner-accountability-before, THEN the (dead) zero-supply guard
-        // and the payout computation. `_previewRedeemCore`'s copy of the shares-validity check
-        // is therefore unreachable dead code on this call path, not a second live gate — this is
-        // a pure bytecode relocation, not a change to which revert fires first.
-        // INV-1 (W2, sc-vault-exit, unchanged by this move): `_previewRedeemCore` enumerates the
-        // held-tokens registry via `_heldTokensList()`, not `_bucketDistributions` — this still
-        // fixes the same latent defect the original inline comment here documented: a token held
-        // from a distribution superseded by `updateBucketDistributions` would otherwise silently
-        // disappear from a `_bucketDistributions`-only payout loop, stranding those funds.
+        // Delegates to the same held-tokens enumeration and per-token payout arithmetic that
+        // backs `previewRedeem`, so the preview and the real redemption always agree.
         (address[] memory tokens, uint256[] memory returnAmounts) = _previewRedeemCore(shares);
 
         // Burn shares (effect)
         _burn(msg.sender, shares);
 
-        // Transfer tokens (interactions) — W5 (sc-oracle, size relief): delegates to
-        // {PayoutLib} via {BucketVaultBase._payoutAndSync} instead of an inline loop; see that
-        // library's header comment. Pure bytecode relocation — same transfer, registry-sync and
-        // `TokenReturned` emission as before, per nonzero payout amount.
+        // Transfer tokens (interactions) — delegates to {PayoutLib} via
+        // {BucketVaultBase._payoutAndSync}: transfers each nonzero payout, re-syncs the
+        // held-tokens registry, and emits `TokenReturned` per token.
         _payoutAndSync(msg.sender, tokens, returnAmounts);
 
-        // Owner accountability check (after) — unchanged by W2.
-        if (isOwnerCaller) {
-            if (!isBucketAccountable()) revert OwnerNotAccountable();
-        }
+        // Owner accountability check (after).
+        _checkOwnerAccountable(isOwnerCaller);
 
-        // W2 (sc-vault-exit): `Redeemed` redesigned — see BucketVaultBase.sol doc comment.
         emit Redeemed(msg.sender, shares, totalSupply(), tokens, returnAmounts);
 
-        // W5 (sc-oracle, returning): once per state-changing function, after the per-token
-        // payout loop above completes -- never inside it, or this becomes O(n^2).
+        // Runs once per state-changing function, after the per-token payout loop completes --
+        // never inside it, or this becomes O(n^2).
         _syncOutpricedStatus();
     }
 
@@ -337,7 +256,7 @@ contract PassiveBucket is BucketVaultBase {
      */
     function previewRedeem(uint256 shares) external view returns (address[] memory tokens, uint256[] memory amounts) {
         bool isOwnerCaller = (msg.sender == owner());
-        if (isOwnerCaller && !isBucketAccountable()) revert OwnerNotAccountable();
+        _checkOwnerAccountable(isOwnerCaller);
 
         (tokens, amounts) = _previewRedeemCore(shares);
 
@@ -389,13 +308,9 @@ contract PassiveBucket is BucketVaultBase {
      *      value decrease.
      */
     function rebalanceByDefi() external nonReentrant whenNotPaused whenSwapNotPaused whenPlatformOperational {
-        _requireHasShares();
-        // W4.2c: permissionless (share-gated via `_requireHasShares()`, not `onlyOwner`) and
-        // mints/burns no shares on this path -- BucketVaultBase's `_update` hook never fires for
-        // it, so the caller's blacklist status must be checked explicitly here.
-        _assertNotBlacklisted(msg.sender);
-        // W2 (sc-swap): rebalanceByDefi does not route through `_execute1inchSwap`, so it must
-        // enforce the shared per-caller/global swap cooldown itself.
+        _requireRebalanceCaller();
+        // rebalanceByDefi does not route through `_execute1inchSwap`, so it must enforce the
+        // shared per-caller/global swap cooldown itself.
         _enforceSwapCooldown(msg.sender);
 
         uint256 totalValueBefore = _calculateTotalValue();
@@ -406,24 +321,14 @@ contract PassiveBucket is BucketVaultBase {
         // Only execute swaps when distribution has drifted outside tolerance
         if (!_isDistributionValid()) {
             uint256 len = tokens.length;
-            // W3 (size-reduction, task #48): the classification double-loop that used to run
-            // inline here (target-weight lookup, overweight/underweight split, excess-USD to
-            // token-units conversion) now lives in
-            // {DistributionLib.classifyAndSizeRebalanceTrades} — see that function's doc comment
-            // for exactly where the seam is (this contract still computes `_getTokenValue` per
-            // token below, since that call is `address(this)`-dependent and cannot safely move
-            // into an externally-linked library; everything downstream of it, including the
-            // `tryGetTokenPrice`/`decimals()` calls, does not depend on `address(this)` and moved
-            // out). Pure bytecode relocation, not a behavior change — same per-token order, same
-            // tie-breaking (`break` on first matching distribution), same skip-on-bad-price via
-            // `tryGetTokenPrice`.
+            // Classify tokens as overweight/underweight against target and size the trades
+            // needed to close the gap; see {DistributionLib.classifyAndSizeRebalanceTrades}.
             uint256[] memory currentValuesUsd = new uint256[](len);
             for (uint256 i = 0; i < len; i++) {
                 currentValuesUsd[i] = _getTokenValue(tokens[i]);
             }
-            // Packed into a struct (see DistributionLib.RebalanceContext) purely to keep the
-            // library call's own parameter count low enough to avoid a stack-too-deep compiler
-            // error there — not a behavior change.
+            // Packed into a struct to keep the library call's parameter count low enough to
+            // avoid a stack-too-deep compiler error.
             DistributionLib.RebalanceContext memory ctx = DistributionLib.RebalanceContext({
                 distributions: _bucketDistributions,
                 totalValueBefore: totalValueBefore,
@@ -437,30 +342,13 @@ contract PassiveBucket is BucketVaultBase {
                 uint256[] memory buyDeficits,
                 uint256[3] memory countAndDeficit
             ) = DistributionLib.classifyAndSizeRebalanceTrades(tokens, currentValuesUsd, ctx);
-            // countAndDeficit packs [sellCount, buyCount, totalDeficit] — see
-            // {DistributionLib.classifyAndSizeRebalanceTrades}'s doc comment for why (stack-depth
-            // limit on the library side, not a behavior change).
+            // countAndDeficit packs [sellCount, buyCount, totalDeficit].
 
             // For each overweight token, sell its excess proportionally to every underweight token
             if (countAndDeficit[2] > 0) {
-                /*
-                for (uint256 i = 0; i < countAndDeficit[0]; i++) {
-                    for (uint256 j = 0; j < countAndDeficit[1]; j++) {
-                        uint256 amountToSell = (sellAmounts[i] * buyDeficits[j]) / countAndDeficit[2];
-                        if (amountToSell > 0) {
-                            _executeBestSwap(sellTokens[i], buyTokens[j], amountToSell, 0);
-                        }
-                    }
-                }
-                */
-                // To reduce the number of swapping, we sell all the tokens to WETH and buy them
-                // back. W3 (size-reduction): this whole sell-then-buy block moved into
-                // {DexSwapLib.executeRebalanceTrades} — identical logic, just parameterized over
-                // the counts/arrays computed above instead of running inline. Safe to move
-                // (unlike the classification loop above it) because this block makes no call to
-                // any BucketVaultBase-inherited internal function — every call it makes is either
-                // to `IWETH`/the DEX routers (external contracts) or to `_executeBestSwap`
-                // itself, already moved into the same library. See DexSwapLib.sol's doc comment.
+                // To reduce the number of swaps, sell all the overweight tokens to WETH and buy
+                // the underweight tokens back from WETH, rather than swapping every
+                // overweight/underweight pair directly.
                 DexSwapLib.executeRebalanceTrades(
                     dexConfigs,
                     dexCount,
@@ -478,30 +366,16 @@ contract PassiveBucket is BucketVaultBase {
 
         // Calculate new total value and settle fees / update token price
         uint256 totalValueAfter = _calculateTotalValue();
-        // EIP-170 size-relief (2026-10-04): this used to be inlined here (byte-identical to the
-        // check inside `BucketVaultBase._executeSwapNoCooldown`, since this path never calls that
-        // function) — now routed through the shared {_checkValueLossAndConsumeBudget} helper. Same
-        // two guards, same order, same reverts: the per-call `MAX_VALUE_LOSS_BPS` (0.5%) bound,
-        // then the cumulative per-epoch budget consume (W2 sc-swap) — see that helper's own
-        // comment for the full rationale and why this was previously duplicated.
         _checkValueLossAndConsumeBudget(totalValueBefore, totalValueAfter);
-        // Revert if distribution is still out of tolerance after swaps; keep the held-tokens
-        // registry accurate; settle fees and emit `Rebalanced`. W3 (size-reduction, task #48):
-        // this used to be three separate calls duplicated byte-for-byte in `rebalanceBy1inch`
-        // below — see {_settleRebalance}'s doc comment (now folded to include the
-        // verify/sync step, not just fee settlement).
         _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
     }
 
     /**
      * @notice Rebalance the portfolio via 1inch aggregation router
-     * @dev Callable by any shareholder. W2 (sc-swap) rewrite: replaced the caller-supplied
-     * `bytes calldata swapCalldata` with four typed parameters — see
-     * BucketVaultBase._execute1inchSwap's doc comment for the full rationale (this entry point is
-     * permissionless/share-gated, which is exactly why the pre-fix arbitrary-calldata shape was
-     * exploitable — see test/OneInchSwapSecurity.t.sol's `PreFixRebalanceBy1inchDrainTest`).
-     * Value loss must be < 0.5% per call (existing) AND within the cumulative per-epoch budget
-     * (new, W2). Fees: 6% of increase to owner, 3% to caller.
+     * @dev Callable by any shareholder. Builds the router calldata from typed parameters
+     * internally, so there is no arbitrary-calldata surface. Value loss must stay under the
+     * per-call cap and within the cumulative per-epoch budget. Fees: 6% of increase to owner,
+     * 3% to caller.
      * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
      * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
      * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
@@ -514,17 +388,34 @@ contract PassiveBucket is BucketVaultBase {
         whenSwapNotPaused
         whenPlatformOperational
     {
-        _requireHasShares();
-        // W4.2c: permissionless (share-gated, not `onlyOwner`) and mints/burns no shares on this
-        // path -- BucketVaultBase's `_update` hook never fires for it, so the caller's blacklist
-        // status must be checked explicitly here.
-        _assertNotBlacklisted(msg.sender);
+        _requireRebalanceCaller();
 
         uint256 beforeTokenPrice = tokenPrice;
         (uint256 totalValueBefore, uint256 totalValueAfter) = _execute1inchSwap(srcToken, dstToken, amount, minReturn);
 
-        // Verify distribution matches target, keep the held-tokens registry accurate, settle
-        // fees and emit `Rebalanced` — see the identical comment in `rebalanceByDefi` above.
+        _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
+    }
+
+    /**
+     * @notice Execute several 1inch swaps in one call (any holder), to rebalance the
+     * portfolio across multiple token pairs in a single transaction.
+     * @dev Each leg is independently validated and value-checked exactly as `rebalanceBy1inch`
+     * checks its single leg; only the swap cooldown is shared across all legs. Distribution
+     * tolerance is checked once, after all legs have settled.
+     * @param legs The ordered list of swaps to execute, one `rebalanceBy1inch`-style leg each.
+     */
+    function rebalanceMultiBy1inch(SwapLeg[] calldata legs)
+        external
+        nonReentrant
+        whenNotPaused
+        whenSwapNotPaused
+        whenPlatformOperational
+    {
+        _requireRebalanceCaller();
+
+        uint256 beforeTokenPrice = tokenPrice;
+        (uint256 totalValueBefore, uint256 totalValueAfter) = _executeMultiLegSwap(legs);
+
         _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
     }
 
@@ -538,29 +429,23 @@ contract PassiveBucket is BucketVaultBase {
     }
 
     /// @notice Unpause the contract
-    /// @dev W3.5 (V-15, `01-REVIEW-USER-REPLY.md` §4.5(4)): plain `onlyOwner`, NOT
-    /// `onlyAccountableOwner`. An accountability check must never gate the UN-blocking
-    /// direction: if the owner is diluted below `MIN_OWNER_BPS` (or transfers/sells shares)
-    /// while paused, `onlyAccountableOwner` here would make `unpause()` permanently
-    /// unreachable, since deposit/redeem stay `whenNotPaused` and there is no other admin
-    /// override. `pause()` keeps the accountability gate (only the emergency-recovery
-    /// direction needs to always be reachable); `unpause()` does not.
+    /// @dev Plain `onlyOwner`, NOT `onlyAccountableOwner`. An accountability check must never
+    /// gate the un-blocking direction: if the owner is diluted below `MIN_OWNER_BPS` while
+    /// paused, `onlyAccountableOwner` here would make `unpause()` permanently unreachable, since
+    /// deposit/redeem stay `whenNotPaused` with no other admin override. `pause()` keeps the
+    /// accountability gate; `unpause()` does not.
     function unpause() external onlyOwnerNotBlacklisted {
         _unpause();
     }
 
     /// @notice Pause swap/rebalance functions
     function pauseSwap() external onlyAccountableOwner {
-        if (swapPaused) revert SwapIsPaused();
-        swapPaused = true;
-        emit SwapPauseChanged(true);
+        _setSwapPaused(true);
     }
 
     /// @notice Unpause swap/rebalance functions
     function unpauseSwap() external onlyAccountableOwner {
-        if (!swapPaused) revert SwapNotPaused();
-        swapPaused = false;
-        emit SwapPauseChanged(false);
+        _setSwapPaused(false);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -591,7 +476,7 @@ contract PassiveBucket is BucketVaultBase {
      * @param _weth The WETH contract address
      */
     function setWETH(address _weth) external onlyOwnerNotBlacklisted {
-        if (_weth == address(0)) revert ZeroAddress();
+        _requireNonZero(_weth);
         weth = _weth;
         emit WETHUpdated(_weth);
     }
@@ -601,10 +486,7 @@ contract PassiveBucket is BucketVaultBase {
      * @param _ownerFeeBps  Owner fee in basis points (e.g., 300 = 3%)
      * @param _callerFeeBps Caller fee in basis points (e.g., 100 = 1%)
      */
-    function setRebalanceFees(uint256 _ownerFeeBps, uint256 _callerFeeBps)
-        external
-        onlyOwnerNotBlacklisted
-    {
+    function setRebalanceFees(uint256 _ownerFeeBps, uint256 _callerFeeBps) external onlyOwnerNotBlacklisted {
         if (_ownerFeeBps + _callerFeeBps > BPS_DENOMINATOR) revert FeesExceed100Percent();
         rebalanceOwnerFeeBps = _ownerFeeBps;
         rebalanceCallerFeeBps = _callerFeeBps;
@@ -632,13 +514,8 @@ contract PassiveBucket is BucketVaultBase {
      * @param distributions The distributions to validate and store
      */
     function _validateAndStoreDistributions(BucketDistribution[] calldata distributions) internal {
-        // W3 (size-reduction, task #48): the validation loop that used to run inline here
-        // (token-whitelist check, zero-weight check, duplicate check, weight-sum check) now lives
-        // in {DistributionLib.validateDistributions} — moved out entirely, mirroring the
-        // `_executeBestSwap` -> `DexSwapLib` move (see that library's doc comment), to shrink
-        // PassiveBucket's own runtime bytecode back under the EIP-170 limit. Pure bytecode
-        // relocation: DistributionLib redeclares the same four errors with identical selectors
-        // (see DistributionLib.sol's doc comment), so revert behavior is unchanged.
+        // Validates token-whitelist membership, nonzero weights, no duplicates, and that
+        // weights sum to WEIGHT_SUM.
         DistributionLib.validateDistributions(distributions, bucketInfo, WEIGHT_SUM);
 
         // Clear existing and store new
@@ -653,17 +530,8 @@ contract PassiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                     INTERNAL: DEX SWAP EXECUTION
     //////////////////////////////////////////////////////////////*/
-
-    /**
-     * @dev Execute a swap using the best available DEX (queries all configured DEXs).
-     * W3 (size-reduction): the body that used to live here directly now lives in
-     * {DexSwapLib.executeBestSwap}, called via `DexSwapLib.executeBestSwap(...)` at each of this
-     * function's former call sites — moved out entirely to shrink PassiveBucket's own runtime
-     * bytecode under the EIP-170 limit. See DexSwapLib.sol's doc comment for why this is a pure
-     * bytecode-location change (DELEGATECALL preserves `address(this)`/`msg.sender`), not a
-     * behavior change. This function itself is now deleted; nothing calls `_executeBestSwap`
-     * anymore.
-     */
+    // Best-DEX swap execution lives in {DexSwapLib.executeBestSwap}, called at each rebalance
+    // call site below.
 
     /*//////////////////////////////////////////////////////////////
                 INTERNAL: DISTRIBUTION VERIFICATION
@@ -695,17 +563,6 @@ contract PassiveBucket is BucketVaultBase {
     /**
      * @dev Verify that the current token value distribution matches target weights
      * within the allowed tolerance. Reverts with DistributionMismatch on failure.
-     * @dev W3 size-reduction: this used to run its own copy of the exact tolerance-check loop
-     * that {_isDistributionValid} already runs, just reverting with per-token detail instead of
-     * returning a bool — two near-identical loops (each calling `_getTokenValue` and doing the
-     * same arithmetic) inlined into PassiveBucket's own bytecode. No test or script anywhere in
-     * this repo asserts on `DistributionMismatch`'s fields (verified: `grep -rn
-     * "DistributionMismatch" test/ script/` returns zero hits outside this file's own
-     * declaration/revert site), so collapsing the two loops into one — this function now just
-     * calls {_isDistributionValid} and reverts on `false` — changes only the revert's argument
-     * detail (dropped, error is now zero-arg), never whether/when it reverts. `_verifyDistribution`
-     * and `_isDistributionValid` agree on failure by construction, since the latter is now the
-     * only place the tolerance check is evaluated.
      */
     function _verifyDistribution() internal view {
         if (!_isDistributionValid()) revert DistributionMismatch();
@@ -715,26 +572,47 @@ contract PassiveBucket is BucketVaultBase {
                     INTERNAL: REBALANCE FEE HANDLING
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev `rebalanceByDefi` and `rebalanceBy1inch` both start with this exact guard —
-    /// deduplicated for the same reason as {_settleRebalance} (task #48, size-reduction): a
-    /// plain in-contract dedup, no library/address(this) concerns.
+    /// @dev `rebalanceByDefi` and `rebalanceBy1inch` both start with this exact guard.
     function _requireHasShares() private view {
         if (balanceOf(msg.sender) == 0) revert InsufficientShares();
     }
 
+    /// @dev Shared zero-address guard, used by `initialize()` and `setWETH()`.
+    function _requireNonZero(address a) private pure {
+        if (a == address(0)) revert ZeroAddress();
+    }
+
+    /// @dev Reverts `OwnerNotAccountable` if `isOwnerCaller` and the owner is currently below
+    /// `MIN_OWNER_BPS`. Shared by `redeem()`'s before/after checks and `previewRedeem()`'s
+    /// before check -- all three were the same inline conditional, checked separately.
+    function _checkOwnerAccountable(bool isOwnerCaller) private view {
+        if (isOwnerCaller && !isBucketAccountable()) revert OwnerNotAccountable();
+    }
+
+    /// @dev Shared setter for `pauseSwap()`/`unpauseSwap()`: reverts if already in the
+    /// requested state, otherwise flips `swapPaused` and emits `SwapPauseChanged`.
+    function _setSwapPaused(bool paused) private {
+        if (swapPaused == paused) {
+            if (paused) revert SwapIsPaused();
+            revert SwapNotPaused();
+        }
+        swapPaused = paused;
+        emit SwapPauseChanged(paused);
+    }
+
+    /// @dev Shared entry guard for all three rebalance entry points: caller must hold shares
+    /// and must not be blacklisted. Collapsed into one function (size relief, same conditions
+    /// each call site checked separately before) since none of the three mint/burn on this
+    /// path, so the transfer-time blacklist hook never fires and each must check explicitly.
+    function _requireRebalanceCaller() private view {
+        _requireHasShares();
+        _assertNotBlacklisted(msg.sender);
+    }
+
     /**
-     * @dev Shared post-swap settlement step for both rebalance entry points. W3 (size-reduction,
-     * task #48): `rebalanceByDefi` and `rebalanceBy1inch` used to each run their OWN
-     * byte-for-byte-identical three-call sequence inline (`_verifyDistribution()`,
-     * `_syncAllHeldTokensFromWhitelist()`, then read `totalSupply()` + call
-     * {_handleRebalanceFees} + emit `Rebalanced`) — folded into one call at each site, rather
-     * than moved to a library: both call sites already live in THIS contract, so there is no
-     * `address(this)`/library-boundary concern here at all (unlike the
-     * `DistributionLib`/`RebalanceFeeLib` moves elsewhere in this file) — this is a plain
-     * in-contract dedup, and `msg.sender` is unchanged across the internal call (used both by
-     * {_handleRebalanceFees}'s caller-fee mint and by the `Rebalanced` event below). Pure
-     * bytecode relocation: same order (verify, then sync, then settle-and-emit), same
-     * arithmetic, same event data.
+     * @dev Shared post-swap settlement step for both rebalance entry points: verifies the
+     * distribution is back within tolerance, re-syncs the held-tokens registry, settles fees
+     * and emits `Rebalanced`.
      * @param totalValueBefore Total USD-8-decimal value before the swap block.
      * @param totalValueAfter Total USD-8-decimal value after the swap block.
      * @param beforeTokenPrice `tokenPrice` as it stood before this rebalance call.
@@ -743,21 +621,13 @@ contract PassiveBucket is BucketVaultBase {
         // Revert if distribution is still out of tolerance after swaps.
         _verifyDistribution();
         // Held-tokens registry: swaps in the block above may have zeroed out sell-side tokens
-        // or newly acquired buy-side tokens (or, for `rebalanceBy1inch`, moved arbitrary
-        // caller-supplied amounts). Re-derive from on-contract balances across the full
-        // whitelist so the registry stays accurate. Deferred from redeem's payout loop per
-        // W1-SCR-REFACTOR-REPORT.md — this only maintains the registry, does not consume it.
+        // or newly acquired buy-side tokens. Re-derive from on-contract balances across the
+        // full whitelist so the registry stays accurate.
         _syncAllHeldTokensFromWhitelist();
 
-        // W5 (sc-oracle, returning): once per state-changing function, after the resync above
-        // completes. `_settleRebalance` is the single call site shared by both
-        // `rebalanceByDefi` and `rebalanceBy1inch`, so this covers both swap paths.
         _syncOutpricedStatus();
 
         uint256 tokenTotalSupply = totalSupply();
-        // Computed once and reused below — the original inline code at both call sites evaluated
-        // this same expression twice (once into `_handleRebalanceFees`, once into the `Rebalanced`
-        // event), always to the same value since none of its inputs change in between.
         uint256 totalValueBasedOnLastTokenPrice = (beforeTokenPrice * tokenTotalSupply) / PRECISION;
         tokenPrice = _handleRebalanceFees(
             totalValueBasedOnLastTokenPrice, totalValueAfter, rebalanceOwnerFeeBps, rebalanceCallerFeeBps
@@ -766,9 +636,8 @@ contract PassiveBucket is BucketVaultBase {
         emit Rebalanced(msg.sender, totalValueBefore, totalValueBasedOnLastTokenPrice, totalValueAfter, tokenPrice);
     }
 
-    /// @dev Shared by {_handleRebalanceFees}'s owner-fee, caller-fee and platform-fee branches —
-    /// see the call site's comment for why the owner-penalty burn is deliberately NOT folded in
-    /// here too. `shares == 0` is a no-op, mirroring each branch's original `if (... > 0)` guard.
+    /// @dev Mints fee shares to `recipient` and emits `RebalanceFeeDistributed`; no-op if
+    /// `shares` is zero.
     function _mintFee(address recipient, uint256 shares, uint256 value) private {
         if (shares > 0) {
             _mint(recipient, shares);
@@ -782,12 +651,6 @@ contract PassiveBucket is BucketVaultBase {
      * @param totalValueAfter Total value after rebalance (USD 8 dec)
      * @param ownerFeeBps Owner fee in basis points (e.g., 300 = 3%)
      * @param callerFeeBps Caller fee in basis points (e.g., 100 = 1%)
-     * @dev W3 (size-reduction, task #48): the fee/penalty ARITHMETIC that used to run inline
-     * here now lives in {RebalanceFeeLib.computeRebalanceFees} — see that function's doc comment
-     * for exactly where the seam is (the `_mint`/`_burn`/`emit` calls below stay here, since
-     * those are inherited `internal` functions unreachable from a library). Pure bytecode
-     * relocation: same snapshotting order, same mutual-exclusivity between the increase/decrease
-     * branches, same rounding, same missing `newPrice > 0` guard on the owner-penalty division.
      */
     function _handleRebalanceFees(
         uint256 totalValueBefore,
@@ -795,9 +658,7 @@ contract PassiveBucket is BucketVaultBase {
         uint256 ownerFeeBps,
         uint256 callerFeeBps
     ) internal returns (uint256) {
-        uint256 valueDifference = totalValueAfter > totalValueBefore
-            ? totalValueAfter - totalValueBefore
-            : totalValueBefore - totalValueAfter;
+        uint256 valueDifference = _absDiff(totalValueAfter, totalValueBefore);
 
         RebalanceFeeLib.FeeResult memory r = RebalanceFeeLib.computeRebalanceFees(
             totalValueBefore,
@@ -810,15 +671,7 @@ contract PassiveBucket is BucketVaultBase {
             bucketInfo.calculateFee(valueDifference)
         );
 
-        // W3 (size-reduction, task #48): these three branches used to each inline their own
-        // `if (shares > 0) { _mint(recipient, shares); emit RebalanceFeeDistributed(...); }` —
-        // byte-for-byte the same shape three times, differing only in which recipient/amount/value
-        // triple is passed. Deduplicated into {_mintFee}, an in-contract private function (no
-        // library boundary: `_mint` is inherited and only callable on `address(this)`'s own
-        // storage, so this could never have been moved to an external library anyway). The
-        // owner-penalty burn below is NOT folded in: it calls `_burn`, not `_mint`, and emits a
-        // different event (`OwnerPenaltyBurned`), so it is not a byte-for-byte duplicate of the
-        // other three and gains nothing from sharing a helper with them.
+        // Mint fee shares to owner, caller and platform.
         _mintFee(owner(), r.ownerShares, r.ownerFeeValue);
         _mintFee(msg.sender, r.callerShares, r.callerFeeValue);
         if (r.sharesToBurn > 0) {
@@ -827,14 +680,16 @@ contract PassiveBucket is BucketVaultBase {
         }
         _mintFee(address(bucketInfo), r.platformShares, r.platformFeeValue);
 
-        // Update token price to reflect new state
-        uint256 priceAfterRebalance =
-            (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
-        if (priceAfterRebalance == 0) revert InvalidPriceAfterRebalance();
-        uint256 priceChange =
-            priceAfterRebalance > r.newPrice ? priceAfterRebalance - r.newPrice : r.newPrice - priceAfterRebalance;
-        if (priceChange > (r.newPrice * 20) / 100) revert PriceDeviationTooHigh();
-        return priceAfterRebalance;
+        // Update token price to reflect new state. Delegates the recompute+bound-check to
+        // {RebalanceFeeLib.validatePriceAfterRebalance} (DELEGATECALL, not inlined) — same
+        // pattern as {RebalanceFeeLib.computeRebalanceFees} just above.
+        return RebalanceFeeLib.validatePriceAfterRebalance(_calculateTotalValue(), totalSupply(), r.newPrice);
+    }
+
+    /// @dev Shared absolute-difference helper, used by both value-change and price-change
+    /// checks in `_handleRebalanceFees` above.
+    function _absDiff(uint256 a, uint256 b) private pure returns (uint256) {
+        return a > b ? a - b : b - a;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -869,9 +724,9 @@ contract PassiveBucket is BucketVaultBase {
                           UUPS UPGRADE
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev W3.3 (`09-DECISION-LOG.md` §10.1): `onlyOwner` alone is condition 1 of 4 — see
-    /// {BucketVaultBase._authorizeUpgradeCommon} for conditions 2-4 (announced-implementation
-    /// match, elapsed 48-hour timelock, live registry approval re-checked at this exact moment).
+    /// @dev Owner-triggered upgrade authorization. {BucketVaultBase._authorizeUpgradeCommon}
+    /// enforces the remaining conditions: the implementation must be registry-approved, the
+    /// 48-hour timelock must have elapsed, and approval is re-checked at execution time.
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         _authorizeUpgradeCommon(newImplementation);
     }

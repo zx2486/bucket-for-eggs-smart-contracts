@@ -17,14 +17,12 @@ contract ActiveBucketFactory {
     address public immutable implementation;
 
     /// @notice The BucketInfo contract every proxy deployed through this factory is wired to.
-    /// @dev W1.7: constructor-set-and-immutable, never caller-supplied. Workspace CLAUDE.md §1.1
-    /// (the precondition under the ownership table): before this fix, `bucketInfoAddr` was a
-    /// caller-supplied parameter to {createActiveBucket}, so an untrusted customer could point a
-    /// vault at a `BucketInfo`-shaped contract they control, defeating the 00:44 oracle
-    /// protection (`updateBucketInfo` is gated on *BucketInfo's* owner precisely so a vault owner
-    /// cannot swap the price feed) and any upgrade registry reached through that pointer. Making
-    /// this immutable and factory-set closes that path the same way `implementation` (`:17`,
-    /// already immutable) closes the analogous implementation-swap path.
+    /// @dev Constructor-set and immutable, never caller-supplied. A caller-supplied BucketInfo
+    /// would let an untrusted customer point a vault at a `BucketInfo`-shaped contract they
+    /// control, defeating the oracle protection (`updateBucketInfo` is gated on *BucketInfo's*
+    /// owner precisely so a vault owner cannot swap the price feed) and any upgrade registry
+    /// reached through that pointer. Making this immutable and factory-set closes that path the
+    /// same way {implementation} being immutable closes the analogous implementation-swap path.
     address public immutable bucketInfo;
 
     /// @notice All proxy addresses deployed through this factory
@@ -54,10 +52,10 @@ contract ActiveBucketFactory {
     /**
      * @notice Deploy a new ActiveBucket proxy and initialise it
      * @dev The caller becomes the owner of the new contract. Portfolio
-     * composition is managed by the owner via swapBy1inch. flashLoan is holder-callable
-     * (W5.3, SC-10, B6), not owner-exclusive.
-     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is no longer a
-     * caller-supplied parameter (W1.7; see the doc comment on {bucketInfo}).
+     * composition is managed by the owner via swapBy1inch. flashLoan is holder-callable,
+     * not owner-exclusive.
+     * The BucketInfo address is this factory's own immutable {bucketInfo} — it is not a
+     * caller-supplied parameter.
      * @param oneInchRouter    Address of the 1inch aggregation router
      * @param name             ERC-20 token name for the share token
      * @param symbol           ERC-20 token symbol for the share token

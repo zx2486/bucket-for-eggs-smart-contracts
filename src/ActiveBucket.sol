@@ -13,15 +13,13 @@ import {BucketVaultBase} from "./base/BucketVaultBase.sol";
  * @title ActiveBucket
  * @author Bucket-for-Eggs Team
  * @notice Upgradeable ERC-20 vault without predefined distributions. The owner has full
- * control over portfolio composition via swapBy1inch. flashLoan is holder-callable (W5.3,
- * SC-10, B6) -- any address holding a nonzero share balance may call it, not just the owner;
- * see the function's own doc comment for why.
+ * control over portfolio composition via swapBy1inch. flashLoan is holder-callable -- any
+ * address holding a nonzero share balance may call it, not just the owner.
  * Users deposit tokens to receive shares and redeem shares to receive proportional tokens.
  * @dev Uses UUPS proxy pattern. Similar to PassiveBucket but without bucket distributions,
- * accountability requirements, or DefiSwap rebalancing.
- * W1 (sc-refactor-base): inherits shared deposit-accounting/value/oracle-consumption logic from
- * {BucketVaultBase}. All state variables below stay declared here, at their pre-refactor linear
- * slots — none were moved into the base contract. See W1-SCR-REFACTOR-REPORT.md.
+ * accountability requirements, or DefiSwap rebalancing. Inherits shared deposit-accounting,
+ * valuation and oracle-consumption logic from {BucketVaultBase}; state variables stay declared
+ * here.
  */
 contract ActiveBucket is BucketVaultBase {
     using SafeERC20 for IERC20;
@@ -46,16 +44,9 @@ contract ActiveBucket is BucketVaultBase {
     uint256 public totalDepositValue;
 
     /// @notice Total withdrawn value in USD (8 decimals)
-    /// @dev W2 (sc-vault-exit): no longer incremented by `redeem()`. The computation required an
-    /// oracle call (`_calculateValueOfShares` -> `_bucketInfo().getTokenPrice`), which INV-1
-    /// forbids on the exit path (workspace CLAUDE.md §"What this project is": "no oracle call,
-    /// no external price, no whitelist iteration on any path a user takes to exit"). Per root
-    /// CLAUDE.md §8 ("Do not remove `totalWithdrawValue`... move the computation off-chain via
-    /// an event; do not delete the capability"), this getter is preserved but is now a frozen
-    /// historical value as of the last pre-W2 redemption on this vault — it does not grow
-    /// further. The statistic itself moves off-chain: an indexer derives it from the redesigned
-    /// `Redeemed` event's `tokens`/`amounts` plus its own price history. See
-    /// BucketVaultBase.sol's `Redeemed` event doc comment.
+    /// @dev No longer incremented by `redeem()`, since that would require an oracle call on the
+    /// exit path. Frozen at its last pre-redesign value; an off-chain indexer derives the
+    /// current statistic from the `Redeemed` event's token amounts plus its own price history.
     uint256 public totalWithdrawValue;
 
     /// @notice Flash loan interest rate (2% = 200 bps). ActiveBucket-only; PassiveBucket has no
@@ -66,18 +57,13 @@ contract ActiveBucket is BucketVaultBase {
     uint256 public performanceFeeBps;
 
     /// @notice The platform-owned {ImplementationRegistry} this vault's upgrades are checked
-    /// against. W3.3 (`09-DECISION-LOG.md` §10.1): `immutable`, constructor-set, never
-    /// repointable — the whitelist authority itself must not be swappable by this vault's
-    /// (customer) owner, mirroring why {bucketInfo}'s repoint path (above) requires the CURRENT
-    /// BucketInfo owner's sign-off, not this vault owner's alone.
+    /// against. Immutable and constructor-set so the whitelist authority can never be swapped
+    /// out by this vault's (customer) owner.
     IImplementationRegistry public immutable REGISTRY;
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
-    // Deposited, Redeemed, TokenReturned, SwapPauseChanged, TokensRecovered, BucketInfoUpdated
-    // moved to BucketVaultBase (byte-identical declarations, verified against PassiveBucket's
-    // matching events before the move). ActiveBucket-only events stay here.
 
     event SwapExecuted(
         address indexed caller, uint256 totalValueBefore, uint256 totalValueAfter, uint256 newTokenPrice
@@ -93,10 +79,6 @@ contract ActiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
     //////////////////////////////////////////////////////////////*/
-    // PlatformNotOperational, InvalidToken, ZeroAddress, ZeroAmount, InvalidRedeemAmount,
-    // SwapIsPaused, SwapNotPaused, InsufficientShares, ETHTransferFailed, SwapFailed,
-    // ValueLossTooHigh, CannotRecoverWhitelistedToken, UnauthorizedBucketInfoUpdate moved to
-    // BucketVaultBase. ActiveBucket-only (flash-loan-specific) errors stay here.
 
     error InsufficientBalance();
     error InsufficientRepayment(uint256 expected, uint256 actual);
@@ -104,9 +86,6 @@ contract ActiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                               MODIFIERS
     //////////////////////////////////////////////////////////////*/
-    // whenPlatformOperational / whenSwapNotPaused moved to BucketVaultBase, rewritten there
-    // against the _bucketInfo()/_swapPaused() hooks below instead of these local state vars
-    // directly — identical behavior.
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -114,10 +93,7 @@ contract ActiveBucket is BucketVaultBase {
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
-    /// implementations against. W3.3: baked in as an immutable constructor parameter, never
-    /// threaded through `initialize`, following the same "factory-immutable" precedent as
-    /// {implementation}/{bucketInfo} on the factory itself (root CLAUDE.md §1.1, W1.7) — so the
-    /// factory needs zero changes to supply it (`09-DECISION-LOG.md` §11.2 / D-3).
+    /// implementations against. Set once at construction and never repointable.
     constructor(address registry_) {
         if (registry_ == address(0)) revert ZeroAddress();
         REGISTRY = IImplementationRegistry(registry_);
@@ -137,10 +113,9 @@ contract ActiveBucket is BucketVaultBase {
         external
         initializer
     {
-        // Task #33 (W1.7 direct-proxy-bypass fix): only a platform-authorized factory may
-        // initialize a proxy against this implementation. Without this, anyone can deploy their
-        // own `ERC1967Proxy(implementation, ...)` and call `initialize()` directly, supplying an
-        // attacker-owned `bucketInfoAddr` and bypassing `ActiveBucketFactory` entirely.
+        // Only a platform-authorized factory may initialize a proxy against this
+        // implementation, preventing a direct `ERC1967Proxy` deploy from bypassing the factory
+        // with an attacker-controlled `bucketInfoAddr`.
         if (!REGISTRY.isAuthorizedFactory(msg.sender)) revert UnauthorizedInitializer();
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
         if (oneInchRouterAddr == address(0)) revert ZeroAddress();
@@ -162,98 +137,44 @@ contract ActiveBucket is BucketVaultBase {
                         DEPOSIT / REDEEM
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @notice Deposit a whitelisted token and receive share tokens
-     * @dev W2 (sc-vault-entry): mints against the vault's LIVE NAV
-     * (`_calculateTotalValue()`/`totalSupply()`), not the stale `tokenPrice` state variable —
-     * see `BucketVaultBase._processDeposit`'s doc comment. `tokenPrice` is now kept
-     * continuously live-synced on every deposit (not just on rebalance) as a side effect.
-     * @param token The token address (address(0) for ETH)
-     * @param amount The amount to deposit (ignored for ETH; msg.value is used)
-     */
-    function deposit(address token, uint256 amount)
-        external
-        payable
-        nonReentrant
-        whenNotPaused
-        whenPlatformOperational
-    {
-        (uint256 actualAmount, uint256 sharesToMint, uint256 depositValue, uint256 newSharePrice) =
-            _processDeposit(token, amount);
-
+    /// @dev `deposit()` itself is shared verbatim from {BucketVaultBase}; this just writes the
+    /// result into this contract's own `totalDepositValue` / `tokenPrice` storage.
+    function _recordDeposit(uint256 depositValue, uint256 newSharePrice) internal override {
         totalDepositValue += depositValue;
         tokenPrice = newSharePrice;
-
-        emit Deposited(msg.sender, token, actualAmount, sharesToMint, depositValue);
     }
 
     /**
      * @notice Redeem shares for proportional underlying tokens
-     * @dev W2 (sc-vault-exit): returns tokens the vault actually holds (the held-tokens
-     * registry maintained by `deposit()`/swap paths since W1), not the full BucketInfo
-     * whitelist — see INV-1 and the in-function comments below.
+     * @dev Returns tokens the vault actually holds (the held-tokens registry), not the full
+     * BucketInfo whitelist, so redemption never depends on a token still being whitelisted.
      * @param shares The number of share tokens to redeem
      */
     function redeem(uint256 shares) external nonReentrant whenNotPaused whenPlatformOperational {
-        if (shares == 0 || shares > balanceOf(msg.sender)) {
-            revert InvalidRedeemAmount();
-        }
-
-        uint256 supply = totalSupply();
-        // Explicit panic-to-revert conversion (W2): division-by-zero below would panic (0x12)
-        // if `supply` were 0. Unreachable today — `shares > 0` and
-        // `shares <= balanceOf(msg.sender) <= supply` together guarantee `supply > 0` — but
-        // guarded explicitly rather than relying on that invariant implicitly.
-        if (supply == 0) revert InvalidRedeemAmount();
-
-        // INV-1 (workspace CLAUDE.md; 04-CONTRACTS-IMPLEMENTATION-PLAN.md §3): redemption
-        // depends on nothing but share arithmetic — no oracle call, no whitelist iteration. W2
-        // (sc-vault-exit): enumerate the held-tokens registry instead of
-        // `bucketInfo.getWhitelistedTokens()`. This also fixes a latent defect in the prior
-        // code: a token de-whitelisted by BucketInfo's owner after users deposited it would
-        // silently vanish from this loop, stranding those users' funds; the held-tokens
-        // registry does not depend on the current whitelist at all.
-        address[] memory tokens = _heldTokensList();
-
-        // Calculate return amounts before burning
-        uint256[] memory returnAmounts = new uint256[](tokens.length);
-        bool anyPayout = false;
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 balance = _getTokenBalance(tokens[i]);
-            returnAmounts[i] = (balance * shares) / supply;
-            if (returnAmounts[i] > 0) anyPayout = true;
-        }
-        // W2 (sc-vault-exit): revert on an all-zero payout (e.g. `shares` so small every
-        // per-token amount rounds down to 0) instead of silently burning shares for nothing.
-        if (!anyPayout) revert NothingToRedeem();
+        // Shared with `previewRedeem` below and with `PassiveBucket`: validation, the
+        // held-tokens snapshot and the pro-rata amounts are computed once in the base contract
+        // so redemption logic isn't duplicated per vault type.
+        (address[] memory tokens, uint256[] memory returnAmounts) = _previewRedeemCore(shares);
 
         // Burn shares
         _burn(msg.sender, shares);
 
-        // Transfer tokens (interactions) — W5 (sc-oracle, size relief): delegates to
-        // {PayoutLib} via {BucketVaultBase._payoutAndSync} instead of an inline loop; see that
-        // library's header comment. Pure bytecode relocation — same transfer, registry-sync and
-        // `TokenReturned` emission as before, per nonzero payout amount.
+        // Transfer tokens (interactions)
         _payoutAndSync(msg.sender, tokens, returnAmounts);
 
-        // W2 (sc-vault-exit): `Redeemed` redesigned (BucketVaultBase.sol doc comment) — USD
-        // value is no longer computed on-chain here (that required the oracle call INV-1
-        // forbids); `totalWithdrawValue` is preserved as a getter but no longer incremented,
-        // per root CLAUDE.md §8. The event carries token amounts so an off-chain indexer can
-        // reconstruct the same statistic from its own price history.
+        // `totalWithdrawValue` is preserved as a getter but no longer incremented here; an
+        // off-chain indexer can reconstruct the USD value from this event's token amounts plus
+        // its own price history.
         emit Redeemed(msg.sender, shares, totalSupply(), tokens, returnAmounts);
 
-        // W5 (sc-oracle, returning): once per state-changing function, after the per-token
-        // payout loop above completes -- never inside it, or this becomes O(n^2).
         _syncOutpricedStatus();
     }
 
     /**
      * @notice Preview the tokens/amounts a `redeem(shares)` call would produce for
      * `msg.sender` against the CURRENT on-chain state, without mutating anything.
-     * @dev ActiveBucket.redeem has no owner-accountability check (unlike PassiveBucket.redeem —
-     * see PassiveBucket.previewRedeem's doc comment), so this is exactly
-     * `BucketVaultBase._previewRedeemCore` with no extra wrapper.
+     * @dev ActiveBucket has no owner-accountability check, so this is a thin wrapper with no
+     * extra guard.
      * @param shares The number of share tokens to preview redeeming
      */
     function previewRedeem(uint256 shares) external view returns (address[] memory tokens, uint256[] memory amounts) {
@@ -266,13 +187,9 @@ contract ActiveBucket is BucketVaultBase {
 
     /**
      * @notice Execute a swap via 1inch aggregation router (owner only)
-     * @dev W2 (sc-swap) rewrite: replaced the caller-supplied `bytes calldata swapCalldata` with
-     * four typed parameters — this contract (via the shared BucketVaultBase._execute1inchSwap)
-     * now builds 100% of the router calldata itself, so there is no arbitrary-calldata surface
-     * left even though this entry point is `onlyOwner`. See BucketVaultBase.sol's contract-level
-     * doc comment and `_execute1inchSwap`'s doc comment for the full rationale (INV-2, INV-9,
-     * hard rule 12 / R-V1). Does not check distribution or accountability. Value loss must be
-     * < 0.5% per call (existing) AND within the cumulative per-epoch budget (new, W2).
+     * @dev Builds the router calldata from typed parameters internally, so there is no
+     * arbitrary-calldata surface. Does not check distribution or accountability. Value loss
+     * must stay under the per-call cap and within the cumulative per-epoch budget.
      * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
      * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
      * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
@@ -286,31 +203,56 @@ contract ActiveBucket is BucketVaultBase {
         whenSwapNotPaused
         whenPlatformOperational
     {
-        // W4.2c: this path mints/burns no shares, so BucketVaultBase's `_update` hook never
-        // fires for it -- explicit check required. `onlyOwner` above already guarantees
-        // `msg.sender == owner()`, so checking either is equivalent; `msg.sender` is used to
-        // match the pattern used at every other entry point in this contract.
+        // No mint/burn on this path, so the blacklist hook on transfers never fires -- check
+        // explicitly.
         _assertNotBlacklisted(msg.sender);
 
         uint256 beforeTokenPrice = tokenPrice;
 
-        // Mechanical call-and-value-loss-check is shared (BucketVaultBase._execute1inchSwap);
-        // access control (onlyOwner, above) and fee handling (below) stay local — see
-        // BucketVaultBase's contract-level doc comment for why this split is intentional.
         (uint256 totalValueBefore, uint256 totalValueAfter) = _execute1inchSwap(srcToken, dstToken, amount, minReturn);
 
-        // W2 (sc-swap): close the cross-wave gap flagged by sc-vault-exit — PassiveBucket already
-        // re-syncs the held-tokens registry after a swap (see PassiveBucket.rebalanceBy1inch); a
-        // 1inch swap can move this vault from holding zero of `dstToken` to holding some, or from
-        // some `srcToken` down to zero, and the registry (consumed by redeem()'s payout token
-        // list) must reflect that.
+        // Keep the held-tokens registry accurate: a swap can move this vault from holding zero
+        // of `dstToken` to holding some, or some `srcToken` down to zero.
         _syncAllHeldTokensFromWhitelist();
 
-        // W5 (sc-oracle, returning): once per state-changing function, after the resync above
-        // completes.
         _syncOutpricedStatus();
 
         // Send performance fee to BucketInfo and owner
+        uint256 tokenTotalSupply = totalSupply();
+        tokenPrice = _handleRebalanceFees(
+            beforeTokenPrice * tokenTotalSupply / PRECISION, totalValueAfter, performanceFeeBps, tokenTotalSupply
+        );
+
+        emit SwapExecuted(msg.sender, totalValueBefore, totalValueAfter, tokenPrice);
+    }
+
+    /**
+     * @notice Execute several 1inch swaps in one call (owner only), e.g. trading multiple
+     * held tokens into one or more others to change the portfolio composition in a single
+     * transaction.
+     * @dev Each leg is independently validated and value-checked exactly as `swapBy1inch`
+     * checks its single leg; only the swap cooldown is shared across all legs.
+     * @param legs The ordered list of swaps to execute, one `swapBy1inch`-style leg each.
+     */
+    function executeMultiSwapBy1inch(SwapLeg[] calldata legs)
+        external
+        onlyOwner
+        nonReentrant
+        whenNotPaused
+        whenSwapNotPaused
+        whenPlatformOperational
+    {
+        // No mint/burn on this path, so the blacklist hook on transfers never fires -- check
+        // explicitly.
+        _assertNotBlacklisted(msg.sender);
+
+        uint256 beforeTokenPrice = tokenPrice;
+
+        (uint256 totalValueBefore, uint256 totalValueAfter) = _executeMultiLegSwap(legs);
+
+        _syncAllHeldTokensFromWhitelist();
+        _syncOutpricedStatus();
+
         uint256 tokenTotalSupply = totalSupply();
         tokenPrice = _handleRebalanceFees(
             beforeTokenPrice * tokenTotalSupply / PRECISION, totalValueAfter, performanceFeeBps, tokenTotalSupply
@@ -325,25 +267,11 @@ contract ActiveBucket is BucketVaultBase {
 
     /**
      * @notice Flash loan any token held by the contract (holder-callable, 2% interest)
-     * @dev W5.3 (SC-10, B6): previously `onlyOwner` -- confirmed stale/not-intended by the
-     * client (`09-DECISION-LOG.md` §8.1 item 6: "flashloan becomes holder-callable;
-     * `ActiveBucket.sol:317-320`'s `onlyOwner` is confirmed stale, not intended"). Gated instead
-     * on holding a nonzero share balance, mirroring `PassiveBucket`'s own holder-gated pattern
-     * (`_requireHasShares()` there; the identical check is duplicated here rather than hoisted
-     * to {BucketVaultBase}, per the same in-contract-dedup reasoning `PassiveBucket.sol:699-704`
-     * gives for not doing so across files). This is a strictly WIDER caller set than before
-     * (owner is still a holder and can still call it) -- no existing caller loses access.
-     * Interface kept exactly as the project's existing bespoke `IFlashLoanReceiver.onFlashLoan`
-     * (initiator, token, amount, fee, data; no return value) rather than adopting
-     * OZ's full IERC3156FlashLender/FlashBorrower -- the brief only asked this stay
-     * "ERC-3156-shaped" (fee-bearing, same-tx strict repayment, reentrancy-guarded against
-     * deposit/redeem, all of which this already is), not that it match ERC-3156's calldata
-     * surface byte-for-byte, and introducing a second interface shape here would be new
-     * surface area the brief did not ask for. Flagged as a documented interpretive decision
-     * for the W5 report (root CLAUDE.md hard rule 5).
-     * Reentrancy: `nonReentrant` here shares the same lock as `deposit`/`redeem`/`redeemForStable`
-     * (all declared on {BucketVaultBase}), so a receiver's callback cannot re-enter any of those
-     * mid-loan to extract value before the repayment check below runs.
+     * @dev Callable by any address holding a nonzero share balance, not just the owner.
+     * Receiver must implement `IFlashLoanReceiver.onFlashLoan` and repay the loan plus fee
+     * within the same transaction. `nonReentrant` shares the same lock as
+     * `deposit`/`redeem`/`redeemForStable`, so a receiver's callback cannot re-enter any of
+     * those mid-loan to extract value before the repayment check below runs.
      * @param token The token to flash loan (address(0) for ETH)
      * @param amount The amount to flash loan
      * @param receiver The address that receives the tokens and callback
@@ -356,10 +284,8 @@ contract ActiveBucket is BucketVaultBase {
         whenPlatformOperational
     {
         _requireHasShares();
-        // W4.2c: no mint/burn on this path, so the `_update` hook never fires -- explicit check
-        // required. Previously relied on `onlyOwner` to also guarantee a non-blacklisted caller
-        // (the owner-handover path already screens for that); now that any shareholder may call
-        // this, the check below is load-bearing on its own, not merely defensive.
+        // No mint/burn on this path, so the blacklist hook on transfers never fires -- check
+        // explicitly.
         _assertNotBlacklisted(msg.sender);
 
         if (receiver == address(0)) revert ZeroAddress();
@@ -394,9 +320,7 @@ contract ActiveBucket is BucketVaultBase {
         emit FlashLoan(msg.sender, receiver, token, amount, fee);
     }
 
-    /// @dev W5.3 (SC-10, B6): mirrors `PassiveBucket._requireHasShares()` exactly -- see this
-    /// file's `flashLoan` doc comment for why it is duplicated here rather than shared via
-    /// {BucketVaultBase}.
+    /// @dev Reverts unless the caller holds a nonzero share balance.
     function _requireHasShares() private view {
         if (balanceOf(msg.sender) == 0) revert InsufficientShares();
     }
@@ -406,8 +330,7 @@ contract ActiveBucket is BucketVaultBase {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Pause the contract (prevents deposits and redemptions)
-    /// @dev Verifier fix (2026-10-04): added `whenCallerNotBlacklisted` -- an admin call by a
-    /// blacklisted owner, same gap class as every function in this section.
+    /// @dev Also blocks a blacklisted owner from pausing.
     function pause() external onlyOwner whenCallerNotBlacklisted {
         _pause();
     }
@@ -434,10 +357,6 @@ contract ActiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                         ADMIN FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-    // recoverTokens, updateBucketInfo moved to BucketVaultBase (byte-identical logic, verified
-    // against PassiveBucket's matching functions before the move; the one cosmetic change is
-    // recoverTokens now calling the shared _transferToken helper instead of inlining the
-    // ETH-call/safeTransfer branch — same behavior, matching PassiveBucket's pre-existing style).
 
     /**
      * @notice Update the 1inch router address
@@ -462,18 +381,10 @@ contract ActiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                           VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-    // calculateTotalValue() moved to BucketVaultBase (byte-identical wrapper around the shared
-    // _calculateTotalValue()).
 
     /*//////////////////////////////////////////////////////////////
                       INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-    // _calculateTotalValue, _calculateValueOfShares, _getTokenBalance, _getTokenDecimals,
-    // _transferToken moved to BucketVaultBase. Verified identical logic against PassiveBucket's
-    // matching helpers before the move: ActiveBucket previously inlined the per-token value
-    // calculation directly here instead of naming it `_getTokenValue`; PassiveBucket already had
-    // the named helper, and both iterated the same `bucketInfo.getWhitelistedTokens()` universe,
-    // so unifying `_calculateTotalValue` around the shared `_getTokenValue` changes no behavior.
 
     /**
      * @dev Handle fee distribution and token price updates after swapping or flash loan repayment. Distributes performance fees to BucketInfo and owner, and updates token price based on new total value.
@@ -528,9 +439,7 @@ contract ActiveBucket is BucketVaultBase {
             }
         }
 
-        // Platform fee to BucketInfo
-        // W3.6: defensive local clamp on top of BucketInfo's own MAX_PLATFORM_FEE cap — see
-        // BucketVaultBase._boundedPlatformFee's doc comment for why.
+        // Platform fee to BucketInfo, clamped to BucketInfo's own fee cap.
         uint256 platformFeeValue = _boundedPlatformFee(valueDifference, bucketInfo.calculateFee(valueDifference));
         if (platformFeeValue > 0 && newPrice > 0) {
             uint256 platformShares = (platformFeeValue * PRECISION) / newPrice;
@@ -543,15 +452,10 @@ contract ActiveBucket is BucketVaultBase {
         return (totalSupply() > 0) ? (_calculateTotalValue() * PRECISION) / totalSupply() : INITIAL_TOKEN_PRICE;
     }
 
-    // isBucketAccountable() moved to BucketVaultBase (byte-identical logic, verified against
-    // PassiveBucket's matching function before the move).
-
     /*//////////////////////////////////////////////////////////////
                     BucketVaultBase ABSTRACT HOOKS
     //////////////////////////////////////////////////////////////*/
-    // Thin overrides exposing this contract's own linear state variables to the shared base
-    // logic, without moving that state out of ActiveBucket (see the storage-layout note at the
-    // top of BucketVaultBase.sol).
+    // Exposes this contract's own state variables to the shared base logic.
 
     function _bucketInfo() internal view override returns (IBucketInfo) {
         return bucketInfo;
@@ -577,9 +481,9 @@ contract ActiveBucket is BucketVaultBase {
         return IImplementationRegistry.Kind.ActiveBucket;
     }
 
-    /// @dev W3.3 (`09-DECISION-LOG.md` §10.1): `onlyOwner` alone is condition 1 of 4 — see
-    /// {BucketVaultBase._authorizeUpgradeCommon} for conditions 2-4 (announced-implementation
-    /// match, elapsed 48-hour timelock, live registry approval re-checked at this exact moment).
+    /// @dev Owner-triggered upgrade authorization. {BucketVaultBase._authorizeUpgradeCommon}
+    /// enforces the remaining conditions: the implementation must be registry-approved, the
+    /// 48-hour timelock must have elapsed, and approval is re-checked at execution time.
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         _authorizeUpgradeCommon(newImplementation);
     }
