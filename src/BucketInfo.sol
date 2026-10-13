@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
 import {TimelockedAdmin} from "./libs/TimelockedAdmin.sol";
+import {BucketVaultBase} from "./base/BucketVaultBase.sol";
 
 /**
  * @title BucketInfo
@@ -697,6 +698,35 @@ contract BucketInfo is Ownable2Step, Pausable {
         accumulatedFeesWithdrawn[NATIVE_TOKEN] += amount;
 
         emit FeesWithdrawn(NATIVE_TOKEN, to, amount);
+    }
+
+    /**
+     * @dev Swap and withdraw accumulated fees (ERC-20 tokens) collected from Bucket contracts
+     * @param to Recipient address
+     * @param tokenAddrs Token addresses to withdraw (the bucket share tokens)
+     * @param dstToken Destination stable token address
+     * @param maxSlippageBps Maximum slippage in basis points for the swap
+     */
+    function withdrawAccumulatedFeesToStable(address to, address[] memory tokenAddrs, address dstToken, uint256 maxSlippageBps) external onlyOwner {
+        require(to != address(0), "Invalid recipient");
+        require(tokenAddrs.length > 0, "No tokens specified");
+        require(dstToken != address(0), "Invalid destination token");
+        require(isWhitelisted[dstToken], "Destination token not whitelisted");
+        require(maxSlippageBps > 0, "Invalid max slippage");
+        uint256 totalRedeemedStableAmount = 0;
+        for (uint256 i = 0; i < tokenAddrs.length; i++) {
+            address tokenAddr = tokenAddrs[i];
+            BucketVaultBase bucket = BucketVaultBase(tokenAddr);
+            uint256 balance = bucket.balanceOf(address(this));
+            if (balance == 0) continue;
+
+            uint256 redeemedStableAmount = bucket.redeemForStable(balance, dstToken, maxSlippageBps);
+            totalRedeemedStableAmount += redeemedStableAmount;
+            accumulatedFeesWithdrawn[tokenAddr] += balance;
+        }
+        require(totalRedeemedStableAmount > 0, "No fees to withdraw");
+        IERC20(dstToken).safeTransfer(to, totalRedeemedStableAmount);
+        emit FeesWithdrawn(dstToken, to, totalRedeemedStableAmount);
     }
 
     /*//////////////////////////////////////////////////////////////

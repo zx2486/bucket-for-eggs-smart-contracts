@@ -24,6 +24,7 @@ import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {ActiveBucket} from "../src/ActiveBucket.sol";
 import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
 import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
+import {BucketInfo} from "../src/BucketInfo.sol";
 
 // ============================================================
 //                      MOCK CONTRACTS
@@ -218,6 +219,7 @@ contract FairValueOneInchRouter {
 // ============================================================
 
 contract RedeemForStableTest is Test {
+    BucketInfo public feeBucketInfo;
     MockBucketInfoRFS public bucketInfo;
     MockERC20RFS public tokenA; // 18 decimals — "volatile" basket asset
     MockERC20RFS public stable; // 6 decimals — redemption target
@@ -252,6 +254,7 @@ contract RedeemForStableTest is Test {
         vm.deal(user1, 1000 ether);
 
         bucketInfo = new MockBucketInfoRFS();
+        feeBucketInfo = new BucketInfo();
         tokenA = new MockERC20RFS("Token A", "TKA", 18);
         stable = new MockERC20RFS("Stable", "STB", 6);
         router = new FairValueOneInchRouter();
@@ -295,6 +298,49 @@ contract RedeemForStableTest is Test {
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(activeImpl), initData);
         active = ActiveBucket(payable(address(proxy)));
+    }
+
+    function _deployFeeWithdrawalPassive() internal returns (PassiveBucket bucket) {
+        PassiveBucket implementation = new PassiveBucket(address(registry));
+        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
+        dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
+        dists[1] = PassiveBucket.BucketDistribution(address(stable), 50);
+        bytes memory initData = abi.encodeWithSelector(
+            PassiveBucket.initialize.selector,
+            address(bucketInfo),
+            dists,
+            address(router),
+            "Fee Share",
+            "fBKT"
+        );
+        bucket = PassiveBucket(payable(address(new ERC1967Proxy(address(implementation), initData))));
+    }
+
+    function _depositAndTransferSharesToBucketInfo(PassiveBucket bucket, uint256 ethAmount, uint256 stableAmount)
+        internal
+        returns (uint256 shares)
+    {
+        stable.mint(user1, stableAmount);
+        vm.startPrank(user1);
+        if (ethAmount > 0) bucket.deposit{value: ethAmount}(address(0), 0);
+        if (stableAmount > 0) {
+            stable.approve(address(bucket), stableAmount);
+            bucket.deposit(address(stable), stableAmount);
+        }
+        vm.stopPrank();
+
+        shares = bucket.balanceOf(user1);
+        vm.prank(user1);
+        bucket.transfer(address(feeBucketInfo), shares);
+    }
+
+    function _setUpFeeWithdrawalPrices() internal {
+        feeBucketInfo.proposeWhitelistAddition(address(stable));
+        vm.warp(block.timestamp + feeBucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
+        feeBucketInfo.executeWhitelistAddition(address(stable));
+        router.setPrice(address(feeBucketInfo), 1e8, 18);
+        router.setPrice(address(stable), STABLE_PRICE, 6);
+        stable.mint(address(router), 1_000_000e6);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -351,6 +397,99 @@ contract RedeemForStableTest is Test {
         assertEq(totalStableOut, expectedTotal, "returned total must match independent fair-value computation");
         assertEq(stable.balanceOf(user1) - stableBefore, expectedTotal, "actual transfer must match returned total");
         assertEq(passive.balanceOf(user1), 0, "all redeemed shares must be burned");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                  BUCKETINFO STABLE-FEE WITHDRAWAL
+    //////////////////////////////////////////////////////////////*/
+
+    function test_WithdrawAccumulatedFeesToStable_RedeemsAndTransfers() public {
+        _setUpFeeWithdrawalPrices();
+        PassiveBucket bucket = _deployFeeWithdrawalPassive();
+        uint256 shares = _depositAndTransferSharesToBucketInfo(bucket, 1 ether, 2_000e6);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(bucket);
+
+        uint256 stableBefore = stable.balanceOf(user1);
+        vm.expectEmit(true, true, false, true, address(feeBucketInfo));
+        emit BucketInfo.FeesWithdrawn(address(stable), user1, 3_999e6);
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 50);
+
+        assertEq(stable.balanceOf(user1) - stableBefore, 3_999e6);
+        assertEq(bucket.balanceOf(address(feeBucketInfo)), 0);
+        assertEq(feeBucketInfo.accumulatedFeesWithdrawn(address(bucket)), shares);
+        assertEq(feeBucketInfo.accumulatedFeesWithdrawn(address(stable)), 0);
+    }
+
+    function test_WithdrawAccumulatedFeesToStable_SkipsVaultWithoutShares() public {
+        _setUpFeeWithdrawalPrices();
+        PassiveBucket emptyBucket = _deployFeeWithdrawalPassive();
+        PassiveBucket fundedBucket = _deployFeeWithdrawalPassive();
+        uint256 shares = _depositAndTransferSharesToBucketInfo(fundedBucket, 1 ether, 2_000e6);
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(emptyBucket);
+        vaults[1] = address(fundedBucket);
+
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 50);
+
+        assertEq(feeBucketInfo.accumulatedFeesWithdrawn(address(emptyBucket)), 0);
+        assertEq(feeBucketInfo.accumulatedFeesWithdrawn(address(fundedBucket)), shares);
+        assertEq(stable.balanceOf(user1), 3_999e6);
+    }
+
+    function test_WithdrawAccumulatedFeesToStable_RevertsWhenNoSharesToRedeem() public {
+        _setUpFeeWithdrawalPrices();
+        PassiveBucket emptyBucket = _deployFeeWithdrawalPassive();
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(emptyBucket);
+
+        vm.expectRevert(bytes("No fees to withdraw"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 50);
+    }
+
+    function test_WithdrawAccumulatedFeesToStable_RevertsForNonOwner() public {
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(0xBEEF);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user1));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 50);
+    }
+
+    function test_WithdrawAccumulatedFeesToStable_RejectsInvalidArguments() public {
+        _setUpFeeWithdrawalPrices();
+        address[] memory noVaults = new address[](0);
+        vm.expectRevert(bytes("Invalid recipient"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(address(0), noVaults, address(stable), 50);
+
+        vm.expectRevert(bytes("No tokens specified"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, noVaults, address(stable), 50);
+
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(0xBEEF);
+        vm.expectRevert(bytes("Invalid destination token"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(0), 50);
+
+        vm.expectRevert(bytes("Destination token not whitelisted"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, user1, 50);
+
+        vm.expectRevert(bytes("Invalid max slippage"));
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 0);
+    }
+
+    function test_WithdrawAccumulatedFeesToStable_FailedVaultRedemptionIsAtomic() public {
+        PassiveBucket bucket = _deployFeeWithdrawalPassive();
+        uint256 shares = _depositAndTransferSharesToBucketInfo(bucket, 1 ether, 2_000e6);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(bucket);
+        uint256 stableBefore = stable.balanceOf(user1);
+
+        vm.expectRevert();
+        feeBucketInfo.withdrawAccumulatedFeesToStable(user1, vaults, address(stable), 50);
+
+        assertEq(bucket.balanceOf(address(feeBucketInfo)), shares);
+        assertEq(feeBucketInfo.accumulatedFeesWithdrawn(address(bucket)), 0);
+        assertEq(stable.balanceOf(user1), stableBefore);
     }
 
     /*//////////////////////////////////////////////////////////////
