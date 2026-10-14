@@ -265,7 +265,7 @@ contract ActiveBucketFactoryTest is Test {
     function test_Create_DefaultPerformanceFee() public {
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         ActiveBucket ab = ActiveBucket(payable(proxy));
-        assertEq(ab.performanceFeeBps(), 1400); // 14% default
+        assertEq(ab.performanceFeeBps(), 1300); // 13% default
     }
 
     // W1.7: InvalidBucketInfo now fires at construction time (see

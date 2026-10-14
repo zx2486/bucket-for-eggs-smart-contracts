@@ -145,7 +145,7 @@ contract BucketInfo is Ownable2Step, Pausable {
      * @dev Constructor sets the initial owner
      */
     constructor() Ownable(msg.sender) {
-        platformFee = 100; // Default 1% fee
+        platformFee = 200; // Default 2% fee
 
         // Whitelist native token (ETH) by default
         isWhitelisted[NATIVE_TOKEN] = true;

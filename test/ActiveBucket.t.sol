@@ -270,7 +270,7 @@ contract ActiveBucketTest is Test {
         assertEq(bucket.owner(), owner);
         assertEq(address(bucket.bucketInfo()), address(bucketInfo));
         assertEq(bucket.oneInchRouter(), oneInchRouter);
-        assertEq(bucket.performanceFeeBps(), 1400); // 5% default
+        assertEq(bucket.performanceFeeBps(), 1300); // 13% default
         assertEq(bucket.tokenPrice(), 0); // not set until first deposit
     }
 

@@ -130,7 +130,7 @@ contract ActiveBucket is BucketVaultBase {
         bucketInfo = IBucketInfo(bucketInfoAddr);
         oneInchRouter = oneInchRouterAddr;
 
-        performanceFeeBps = 1400; // 14% default
+        performanceFeeBps = 1300; // 13% default
     }
 
     /*//////////////////////////////////////////////////////////////

@@ -189,8 +189,8 @@ contract PassiveBucket is BucketVaultBase {
         bucketInfo = IBucketInfo(bucketInfoAddr);
         oneInchRouter = oneInchRouterAddr;
 
-        rebalanceOwnerFeeBps = 600; // 6% default
-        rebalanceCallerFeeBps = 300; // 3% default
+        rebalanceOwnerFeeBps = 800; // 8% default
+        rebalanceCallerFeeBps = 500; // 5% default
 
         _validateAndStoreDistributions(distributions);
     }

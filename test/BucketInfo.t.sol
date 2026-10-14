@@ -68,7 +68,7 @@ contract BucketInfoTest is Test {
 
     function test_Deployment() public view {
         assertEq(bucketInfo.owner(), owner);
-        assertEq(bucketInfo.platformFee(), 100); // Default 1%
+        assertEq(bucketInfo.platformFee(), 200); // Default 2%
         assertEq(bucketInfo.PRICE_DECIMALS(), 8);
         assertEq(bucketInfo.MAX_PLATFORM_FEE(), 1000);
 
@@ -403,7 +403,7 @@ contract BucketInfoTest is Test {
     }
 
     function test_ProposeAndExecutePlatformFee() public {
-        uint256 newFee = 200; // 2%
+        uint256 newFee = 300; // 3%
         uint256 expectedEta = block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY();
 
         vm.expectEmit(false, false, false, true);
@@ -411,7 +411,7 @@ contract BucketInfoTest is Test {
         bucketInfo.proposePlatformFee(newFee);
 
         // Not applied yet.
-        assertEq(bucketInfo.platformFee(), 100);
+        assertEq(bucketInfo.platformFee(), 200);
 
         vm.warp(expectedEta);
 
@@ -462,7 +462,7 @@ contract BucketInfoTest is Test {
 
     function test_CalculateFee() public view {
         uint256 amount = 1000 * 10 ** 18;
-        uint256 expectedFee = (amount * 100) / 10000; // 1% of amount
+        uint256 expectedFee = (amount * 200) / 10000; // 2% of amount
 
         assertEq(bucketInfo.calculateFee(amount), expectedFee);
     }

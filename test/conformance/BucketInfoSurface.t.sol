@@ -115,6 +115,7 @@ contract BucketInfoSurfaceConformanceTest is Test {
         allowedExceptions.push("unpausePlatform");
         allowedExceptions.push("withdrawAccumulatedFees");
         allowedExceptions.push("withdrawAccumulatedETHFees");
+        allowedExceptions.push("withdrawAccumulatedFeesToStable");
 
         // Blacklist management (W4.1, D2): immediate add/remove, single + batch, mirroring
         // token-whitelist REMOVAL's own "no timelock, fail-closed" rationale -- see
