@@ -14,13 +14,10 @@ contract BucketInfoTest is Test {
     address public priceFeed;
 
     event TokenWhitelisted(address indexed token, bool whitelisted);
-    // W1 (sc-oracle): PriceUpdated was split into TokenPriceInitialized (first-ever set,
-    // unbounded per A1) and TokenPriceUpdated (subsequent sets, rate-limited per A1).
     event TokenPriceInitialized(address indexed token, uint256 price);
     event TokenPriceUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
     event PriceFeedUpdated(address indexed token, address priceFeed);
     event PlatformFeeUpdated(uint256 newFee);
-    // W3.4: the timelock-proposal events for the three now-timelocked setter families.
     event WhitelistAdditionProposed(address indexed token, uint256 eta);
     event WhitelistAdditionCanceled(address indexed token);
     event PriceFeedProposed(address indexed token, address priceFeed, uint256 eta);
@@ -39,40 +36,30 @@ contract BucketInfoTest is Test {
         bucketInfo = new BucketInfo();
     }
 
-    /// @dev W3.4 turned setTokenWhitelist's addition path into propose+timelock+execute.
-    /// Most tests below are not ABOUT that timelock -- they just need a whitelisted token as
-    /// a precondition -- so this helper reproduces the old one-call setup semantics.
     function _whitelistToken(address token) internal {
         bucketInfo.proposeWhitelistAddition(token);
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
         bucketInfo.executeWhitelistAddition(token);
     }
 
-    /// @dev Same pattern as {_whitelistToken}, for setPriceFeed's propose+execute conversion.
     function _setPriceFeedFor(address token, address feed) internal {
         bucketInfo.proposePriceFeed(token, feed);
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
         bucketInfo.executePriceFeed(token);
     }
 
-    /// @dev Same pattern as {_whitelistToken}, for setPlatformFee's propose+execute conversion.
     function _setPlatformFeeTo(uint256 fee) internal {
         bucketInfo.proposePlatformFee(fee);
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
         bucketInfo.executePlatformFee();
     }
 
-    /*//////////////////////////////////////////////////////////////
-                            DEPLOYMENT TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_Deployment() public view {
         assertEq(bucketInfo.owner(), owner);
-        assertEq(bucketInfo.platformFee(), 200); // Default 2%
+        assertEq(bucketInfo.platformFee(), 200);
         assertEq(bucketInfo.PRICE_DECIMALS(), 8);
         assertEq(bucketInfo.MAX_PLATFORM_FEE(), 1000);
 
-        // Native token should be whitelisted by default
         assertTrue(bucketInfo.isTokenWhitelisted(address(0)));
         assertEq(bucketInfo.getWhitelistedTokenCount(), 1);
     }
@@ -81,10 +68,6 @@ contract BucketInfoTest is Test {
         assertTrue(bucketInfo.isTokenWhitelisted(bucketInfo.NATIVE_TOKEN()));
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        WHITELIST MANAGEMENT TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_ProposeAndExecuteWhitelistAddition() public {
         uint256 expectedEta = block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY();
 
@@ -92,7 +75,6 @@ contract BucketInfoTest is Test {
         emit WhitelistAdditionProposed(tokenA, expectedEta);
         bucketInfo.proposeWhitelistAddition(tokenA);
 
-        // Not whitelisted yet -- only proposed.
         assertFalse(bucketInfo.isTokenWhitelisted(tokenA));
         assertTrue(bucketInfo.pendingWhitelistAddition(tokenA));
         assertEq(bucketInfo.whitelistAdditionEta(tokenA), expectedEta);
@@ -104,18 +86,18 @@ contract BucketInfoTest is Test {
         bucketInfo.executeWhitelistAddition(tokenA);
 
         assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
-        assertEq(bucketInfo.getWhitelistedTokenCount(), 2); // Native + tokenA
+        assertEq(bucketInfo.getWhitelistedTokenCount(), 2);
         assertFalse(bucketInfo.pendingWhitelistAddition(tokenA));
     }
 
     function test_RevertExecuteWhitelistAdditionBeforeTimelockElapsed() public {
         bucketInfo.proposeWhitelistAddition(tokenA);
-        vm.expectRevert(); // TimelockNotElapsed
+        vm.expectRevert();
         bucketInfo.executeWhitelistAddition(tokenA);
     }
 
     function test_RevertExecuteWhitelistAdditionWithNoProposal() public {
-        vm.expectRevert(); // NoProposalPending
+        vm.expectRevert();
         bucketInfo.executeWhitelistAddition(tokenA);
     }
 
@@ -128,7 +110,7 @@ contract BucketInfoTest is Test {
 
         assertFalse(bucketInfo.pendingWhitelistAddition(tokenA));
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
-        vm.expectRevert(); // NoProposalPending -- cancel cleared it
+        vm.expectRevert();
         bucketInfo.executeWhitelistAddition(tokenA);
     }
 
@@ -136,14 +118,13 @@ contract BucketInfoTest is Test {
         _whitelistToken(tokenA);
         assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
 
-        // B5: removal stays immediate -- no propose/execute split, unlike addition.
         vm.expectEmit(true, false, false, true);
         emit TokenWhitelisted(tokenA, false);
 
         bucketInfo.removeTokenWhitelist(tokenA);
 
         assertFalse(bucketInfo.isTokenWhitelisted(tokenA));
-        assertEq(bucketInfo.getWhitelistedTokenCount(), 1); // Only native
+        assertEq(bucketInfo.getWhitelistedTokenCount(), 1);
     }
 
     function test_ProposeWhitelistAdditionOnlyOwner() public {
@@ -185,7 +166,7 @@ contract BucketInfoTest is Test {
         assertTrue(bucketInfo.isTokenWhitelisted(tokenA));
         assertTrue(bucketInfo.isTokenWhitelisted(tokenB));
         assertTrue(bucketInfo.isTokenWhitelisted(user1));
-        assertEq(bucketInfo.getWhitelistedTokenCount(), 4); // Native + 3 tokens
+        assertEq(bucketInfo.getWhitelistedTokenCount(), 4);
     }
 
     function test_BatchRemoveTokenFromWhitelist() public {
@@ -202,7 +183,7 @@ contract BucketInfoTest is Test {
 
         assertFalse(bucketInfo.isTokenWhitelisted(tokenA));
         assertFalse(bucketInfo.isTokenWhitelisted(tokenB));
-        assertEq(bucketInfo.getWhitelistedTokenCount(), 1); // Only native
+        assertEq(bucketInfo.getWhitelistedTokenCount(), 1);
     }
 
     function test_GetWhitelistedTokens() public {
@@ -215,16 +196,11 @@ contract BucketInfoTest is Test {
         assertTrue(tokens[0] == address(0) || tokens[1] == address(0) || tokens[2] == address(0));
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        PRICE MANAGEMENT TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_SetTokenPrice() public {
         _whitelistToken(tokenA);
 
-        uint256 price = 2000 * 10 ** 8; // $2000 with 8 decimals
+        uint256 price = 2000 * 10 ** 8;
 
-        // First-ever set for tokenA: unbounded per A1, emits TokenPriceInitialized (W1).
         vm.expectEmit(true, false, false, true);
         emit TokenPriceInitialized(tokenA, price);
 
@@ -233,16 +209,13 @@ contract BucketInfoTest is Test {
         assertEq(bucketInfo.getTokenPrice(tokenA), price);
     }
 
-    /// W1 (sc-oracle, A1): a second setTokenPrice call on the same token, within
-    /// MAX_PRICE_DEVIATION_BPS and after MIN_PRICE_UPDATE_INTERVAL, succeeds and emits
-    /// TokenPriceUpdated(token, oldPrice, newPrice).
     function test_SetTokenPriceSecondUpdateWithinCapEmitsTokenPriceUpdated() public {
         _whitelistToken(tokenA);
         uint256 firstPrice = 2000 * 10 ** 8;
         bucketInfo.setTokenPrice(tokenA, firstPrice);
 
         vm.warp(block.timestamp + bucketInfo.MIN_PRICE_UPDATE_INTERVAL());
-        uint256 secondPrice = 2100 * 10 ** 8; // +5%, within the 20% cap
+        uint256 secondPrice = 2100 * 10 ** 8;
 
         vm.expectEmit(true, false, false, true);
         emit TokenPriceUpdated(tokenA, firstPrice, secondPrice);
@@ -281,11 +254,9 @@ contract BucketInfoTest is Test {
         bucketInfo.batchExecuteWhitelistAdditions(tokens);
 
         uint256[] memory prices = new uint256[](2);
-        prices[0] = 2000 * 10 ** 8; // $2000
-        prices[1] = 1500 * 10 ** 8; // $1500
+        prices[0] = 2000 * 10 ** 8;
+        prices[1] = 1500 * 10 ** 8;
 
-        // setTokenPrice/batchSetTokenPrices stay untimelocked by design (W3.4) -- the A1
-        // rate limit is the protection here, not a timelock.
         bucketInfo.batchSetTokenPrices(tokens, prices);
 
         assertEq(bucketInfo.getTokenPrice(tokenA), prices[0]);
@@ -313,7 +284,6 @@ contract BucketInfoTest is Test {
         emit PriceFeedProposed(tokenA, priceFeed, expectedEta);
         bucketInfo.proposePriceFeed(tokenA, priceFeed);
 
-        // Not applied yet.
         assertEq(bucketInfo.getPriceFeed(tokenA), address(0));
 
         vm.warp(expectedEta);
@@ -329,7 +299,7 @@ contract BucketInfoTest is Test {
         _whitelistToken(tokenA);
         bucketInfo.proposePriceFeed(tokenA, priceFeed);
 
-        vm.expectRevert(); // TimelockNotElapsed
+        vm.expectRevert();
         bucketInfo.executePriceFeed(tokenA);
     }
 
@@ -342,7 +312,7 @@ contract BucketInfoTest is Test {
         bucketInfo.cancelPriceFeed(tokenA);
 
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
-        vm.expectRevert(); // NoProposalPending -- cancel cleared it
+        vm.expectRevert();
         bucketInfo.executePriceFeed(tokenA);
     }
 
@@ -370,10 +340,6 @@ contract BucketInfoTest is Test {
         vm.expectRevert("Token not whitelisted");
         bucketInfo.getTokenPrice(tokenA);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                        PLATFORM MANAGEMENT TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_PausePlatform() public {
         bucketInfo.pausePlatform();
@@ -403,14 +369,13 @@ contract BucketInfoTest is Test {
     }
 
     function test_ProposeAndExecutePlatformFee() public {
-        uint256 newFee = 300; // 3%
+        uint256 newFee = 300;
         uint256 expectedEta = block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY();
 
         vm.expectEmit(false, false, false, true);
         emit PlatformFeeProposed(newFee, expectedEta);
         bucketInfo.proposePlatformFee(newFee);
 
-        // Not applied yet.
         assertEq(bucketInfo.platformFee(), 200);
 
         vm.warp(expectedEta);
@@ -425,7 +390,7 @@ contract BucketInfoTest is Test {
     function test_RevertExecutePlatformFeeBeforeTimelockElapsed() public {
         bucketInfo.proposePlatformFee(200);
 
-        vm.expectRevert(); // TimelockNotElapsed
+        vm.expectRevert();
         bucketInfo.executePlatformFee();
     }
 
@@ -437,7 +402,7 @@ contract BucketInfoTest is Test {
         bucketInfo.cancelPlatformFee();
 
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
-        vm.expectRevert(); // NoProposalPending -- cancel cleared it
+        vm.expectRevert();
         bucketInfo.executePlatformFee();
     }
 
@@ -449,29 +414,25 @@ contract BucketInfoTest is Test {
 
     function test_RevertProposePlatformFeeExceedsMaximum() public {
         vm.expectRevert("Fee exceeds maximum");
-        bucketInfo.proposePlatformFee(1001); // Max is 1000 (10%)
+        bucketInfo.proposePlatformFee(1001);
     }
 
     function test_IsPlatformOperational() public view {
         assertTrue(bucketInfo.isPlatformOperational());
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        UTILITY FUNCTION TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_CalculateFee() public view {
         uint256 amount = 1000 * 10 ** 18;
-        uint256 expectedFee = (amount * 200) / 10000; // 2% of amount
+        uint256 expectedFee = (amount * 200) / 10000;
 
         assertEq(bucketInfo.calculateFee(amount), expectedFee);
     }
 
     function test_CalculateFeeWithDifferentPlatformFee() public {
-        _setPlatformFeeTo(250); // 2.5%
+        _setPlatformFeeTo(250);
 
         uint256 amount = 1000 * 10 ** 18;
-        uint256 expectedFee = (amount * 250) / 10000; // 2.5% of amount
+        uint256 expectedFee = (amount * 250) / 10000;
 
         assertEq(bucketInfo.calculateFee(amount), expectedFee);
     }
@@ -480,7 +441,7 @@ contract BucketInfoTest is Test {
         _whitelistToken(tokenA);
 
         assertTrue(bucketInfo.isTokenValid(tokenA));
-        assertFalse(bucketInfo.isTokenValid(tokenB)); // Not whitelisted
+        assertFalse(bucketInfo.isTokenValid(tokenB));
     }
 
     function test_IsTokenValidWhenPaused() public {
@@ -489,12 +450,8 @@ contract BucketInfoTest is Test {
 
         bucketInfo.pausePlatform();
 
-        assertFalse(bucketInfo.isTokenValid(tokenA)); // Platform paused
+        assertFalse(bucketInfo.isTokenValid(tokenA));
     }
-
-    /*//////////////////////////////////////////////////////////////
-                            FUZZ TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function testFuzz_SetTokenPrice(uint256 price) public {
         vm.assume(price > 0);
@@ -516,7 +473,7 @@ contract BucketInfoTest is Test {
 
     function testFuzz_CalculateFee(uint256 amount, uint256 fee) public {
         fee = bound(fee, 0, 1000);
-        amount = bound(amount, 0, type(uint128).max); // Prevent overflow
+        amount = bound(amount, 0, type(uint128).max);
 
         _setPlatformFeeTo(fee);
         uint256 expectedFee = (amount * fee) / 10000;
@@ -524,19 +481,9 @@ contract BucketInfoTest is Test {
         assertEq(bucketInfo.calculateFee(amount), expectedFee);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        OWNERSHIP TESTS
-    //////////////////////////////////////////////////////////////*/
-
-    /// W3.1: BucketInfo is Ownable2Step now -- transferOwnership only PROPOSES; owner()
-    /// does not change until the pending owner calls acceptOwnership(). D-3
-    /// (09-DECISION-LOG.md §11.2) scopes this to BucketInfo alone among pre-existing
-    /// contracts, which is exactly why this test (and not ActiveBucket/PassiveBucket/
-    /// PureMembership's factory-handover tests) is the one that needed the two-step rewrite.
     function test_TransferOwnershipIsTwoStep() public {
         bucketInfo.transferOwnership(user1);
 
-        // Proposed, not yet transferred.
         assertEq(bucketInfo.owner(), owner);
         assertEq(bucketInfo.pendingOwner(), user1);
 
@@ -555,21 +502,12 @@ contract BucketInfoTest is Test {
         bucketInfo.acceptOwnership();
     }
 
-    /// Q14.2 (10-BLOCKER-14-DECOMPOSITION-ANSWER.md:6-7): renounceOwnership must always
-    /// revert -- the only route to a new owner is transferOwnership (e.g. to a future DAO),
-    /// never renunciation. This is the pre-fix-must-fail evidence: on the pre-fix commit
-    /// (plain Ownable, no override) this assertion fails because renounceOwnership succeeds
-    /// and owner() becomes address(0).
     function test_RenounceOwnershipAlwaysReverts() public {
         vm.expectRevert(BucketInfo.RenounceOwnershipDisabled.selector);
         bucketInfo.renounceOwnership();
 
         assertEq(bucketInfo.owner(), owner);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                        GAS TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Gas_ProposeWhitelistAddition() public {
         bucketInfo.proposeWhitelistAddition(tokenA);

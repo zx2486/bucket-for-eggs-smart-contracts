@@ -9,7 +9,6 @@ import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
 
 // ============================================================
-//                      MOCK CONTRACTS
 // ============================================================
 
 contract MockBucketInfoForMembership {
@@ -73,10 +72,6 @@ contract MockBucketInfoForMembership {
         operational = _operational;
     }
 
-    // --- W4.2b regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
-    // for the full explanation -- PureMembership's own _update override (task #55) routes
-    // through the same _isBlacklistedFailClosed fail-closed helper, so this mock needed the
-    // identical fix. Defaults to false.
     mapping(address => bool) public blacklisted;
 
     function isBlacklisted(address account) external view returns (bool) {
@@ -87,8 +82,6 @@ contract MockBucketInfoForMembership {
         blacklisted[account] = status;
     }
 
-    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
-    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
     function isPotentiallyOutpriced(address) external pure returns (bool) {
         return false;
     }
@@ -141,7 +134,6 @@ contract MockERC20ForMembership {
 }
 
 // ============================================================
-//                      TEST CONTRACT
 // ============================================================
 
 contract PureMembershipTest is Test {
@@ -149,9 +141,6 @@ contract PureMembershipTest is Test {
     PureMembership public membership;
     MockBucketInfoForMembership public bucketInfo;
     MockERC20ForMembership public payToken;
-    // W3.3: platform-owned registry PureMembership's immutable constructor parameter now
-    // requires. Not exercised by most tests here -- deployed purely so
-    // `new PureMembership(address)` compiles; queue/cancel/authorize tests approve into it directly.
     ImplementationRegistry public registry;
 
     address public owner;
@@ -162,7 +151,6 @@ contract PureMembershipTest is Test {
     uint256 constant ETH_PRICE = 2000e8;
     uint256 constant PAY_TOKEN_PRICE = 1e8; // $1 USD
 
-    // Membership configs
     uint256 constant BASIC_ID = 1;
     uint256 constant BASIC_LEVEL = 1;
     uint256 constant BASIC_PRICE = 10e8; // $10 USD
@@ -213,13 +201,8 @@ contract PureMembershipTest is Test {
 
         registry = new ImplementationRegistry(owner);
         implementation = new PureMembership(address(registry));
-        // Task #33 (W1.7 direct-proxy-bypass fix): this test suite deploys proxies directly
-        // (not through `PureMembershipFactory`), so the test contract itself must be an
-        // authorized "factory" from the registry's point of view, or every `initialize()` call
-        // below reverts with `UnauthorizedInitializer()`.
         registry.setAuthorizedFactory(address(this), true);
 
-        // Prepare membership configs
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
         configs[0] = PureMembership.MembershipConfig(BASIC_ID, BASIC_LEVEL, "Basic", BASIC_PRICE, BASIC_DURATION);
         configs[1] =
@@ -231,7 +214,6 @@ contract PureMembershipTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         membership = PureMembership(payable(address(proxy)));
 
-        // Fund users
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
         vm.deal(user3, 100 ether);
@@ -277,8 +259,6 @@ contract PureMembershipTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_BuyMembershipWithERC20() public {
-        // Price: $10, Token price: $1, Decimals: 6
-        // paymentAmount = 10e8 * 1e6 / 1e8 = 10e6 (10 USDC)
         uint256 expectedPayment = 10e6;
 
         vm.startPrank(user1);
@@ -294,8 +274,6 @@ contract PureMembershipTest is Test {
     }
 
     function test_BuyMembershipWithETH() public {
-        // Price: $10, ETH price: $2000, Decimals: 18
-        // paymentAmount = 10e8 * 1e18 / 2000e8 = 0.005 ETH = 5e15 wei
         uint256 expectedPayment = 5e15;
 
         vm.prank(user1);
@@ -314,7 +292,6 @@ contract PureMembershipTest is Test {
         vm.prank(user1);
         membership.buyMembership{value: overpay}(BASIC_ID, address(0), 0);
 
-        // Should refund overpay - expectedPayment
         uint256 ethSpent = ethBefore - user1.balance;
         assertEq(ethSpent, expectedPayment);
     }
@@ -363,25 +340,20 @@ contract PureMembershipTest is Test {
     function test_RenewMembership() public {
         uint256 expectedPayment = 10e6;
 
-        // First purchase
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment * 2);
         membership.buyMembership(BASIC_ID, address(payToken), 0);
 
         uint256 firstExpiry = membership.membershipExpiry(user1, BASIC_ID);
 
-        // Advance time but still within membership
         vm.warp(block.timestamp + 15 days);
 
-        // Renew
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         uint256 newExpiry = membership.membershipExpiry(user1, BASIC_ID);
-        // Should extend from first expiry, not from current time
         assertEq(newExpiry, firstExpiry + BASIC_DURATION);
         assertEq(membership.revenueByToken(address(payToken)), expectedPayment * 2);
-        // Active count should still be 1 (not double counted)
         assertEq(membership.activeMembershipCount(BASIC_LEVEL), 1);
     }
 
@@ -392,14 +364,11 @@ contract PureMembershipTest is Test {
         payToken.approve(address(membership), expectedPayment * 2);
         membership.buyMembership(BASIC_ID, address(payToken), 0);
 
-        // Advance past expiry
         vm.warp(block.timestamp + BASIC_DURATION + 1);
 
-        // Buy again (not renew since expired) - user already has token
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
-        // Expiry should be from current time
         assertEq(membership.membershipExpiry(user1, BASIC_ID), block.timestamp + BASIC_DURATION);
     }
 
@@ -416,11 +385,10 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         assertTrue(membership.checkMembershipStatus(user1, BASIC_LEVEL));
-        assertTrue(membership.checkMembershipStatus(user1, 0)); // Level 0 should also pass
+        assertTrue(membership.checkMembershipStatus(user1, 0));
     }
 
     function test_CheckMembershipStatusHigherLevel() public {
-        // Buy premium (level 2)
         uint256 expectedPayment = 50e6;
 
         vm.startPrank(user1);
@@ -429,8 +397,8 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         assertTrue(membership.checkMembershipStatus(user1, PREMIUM_LEVEL));
-        assertTrue(membership.checkMembershipStatus(user1, BASIC_LEVEL)); // Should also pass for lower level
-        assertFalse(membership.checkMembershipStatus(user1, VIP_LEVEL)); // Should fail for higher level
+        assertTrue(membership.checkMembershipStatus(user1, BASIC_LEVEL));
+        assertFalse(membership.checkMembershipStatus(user1, VIP_LEVEL));
     }
 
     function test_CheckMembershipStatusExpired() public {
@@ -441,7 +409,6 @@ contract PureMembershipTest is Test {
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
-        // Advance past expiry
         vm.warp(block.timestamp + BASIC_DURATION + 1);
 
         assertFalse(membership.checkMembershipStatus(user1, BASIC_LEVEL));
@@ -496,7 +463,6 @@ contract PureMembershipTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_GetUserMemberships() public {
-        // Buy basic and premium
         vm.startPrank(user1);
         payToken.approve(address(membership), 60e6);
         membership.buyMembership(BASIC_ID, address(payToken), 0);
@@ -533,7 +499,6 @@ contract PureMembershipTest is Test {
     }
 
     function test_WithdrawRevenue() public {
-        // VIP costs $200 → 200e6 USDC. First withdrawal requires >= $100 USD.
         uint256 expectedPayment = 200e6;
 
         vm.startPrank(user1);
@@ -542,7 +507,7 @@ contract PureMembershipTest is Test {
         vm.stopPrank();
 
         uint256 withdrawAmount = expectedPayment;
-        uint256 fee = (withdrawAmount * 100) / 10000; // 1% fee
+        uint256 fee = (withdrawAmount * 100) / 10000;
         uint256 ownerAmount = withdrawAmount - fee;
 
         address recipient = makeAddr("recipient");
@@ -614,12 +579,6 @@ contract PureMembershipTest is Test {
         membership.pause();
     }
 
-    /// @dev Parity gap vs. `test/ActiveBucket.t.sol`'s `test_RevertUnpauseNotOwner` -- task #42
-    /// (W3.5). Unlike ActiveBucket/PassiveBucket, PureMembership has no accountability concept
-    /// at all (`grep -n "isBucketAccountable\|MIN_OWNER_BPS\|onlyAccountableOwner" src/PureMembership.sol`
-    /// returns zero hits) -- both `pause()` and `unpause()` are plain `onlyOwner` (`:554`, `:559`),
-    /// so the dilution-lockout scenario tested on the other two vaults does not apply here; this
-    /// closes only the not-owner-revert parity gap.
     function test_RevertUnpauseNotOwner() public {
         membership.pause();
 
@@ -633,21 +592,17 @@ contract PureMembershipTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_UpdateBucketInfo() public {
-        // Create new BucketInfo
         MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
         newBucketInfo.addToken(address(0), ETH_PRICE);
         newBucketInfo.addToken(address(payToken), PAY_TOKEN_PRICE);
 
         address oldBucketInfo = address(membership.bucketInfo());
 
-        // Set bucketInfo owner to owner (test contract)
         bucketInfo.setOwner(owner);
 
-        // Propose is gated on the CURRENT BucketInfo's owner.
         membership.proposeUpdateBucketInfo(address(newBucketInfo));
         vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
 
-        // Execute is permissionless once the delay has elapsed and no veto arrived.
         vm.expectEmit(true, true, true, true);
         emit BucketInfoUpdated(oldBucketInfo, address(newBucketInfo), address(this));
 
@@ -657,19 +612,15 @@ contract PureMembershipTest is Test {
     }
 
     function test_UpdateBucketInfoFromBucketInfoOwner() public {
-        // Create new BucketInfo
         MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
         newBucketInfo.addToken(address(0), ETH_PRICE);
 
-        // Set bucketInfo owner to user1
         bucketInfo.setOwner(user1);
 
-        // user1 should be able to propose
         vm.prank(user1);
         membership.proposeUpdateBucketInfo(address(newBucketInfo));
 
         vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
-        // execute is permissionless -- anyone may apply it once the delay has elapsed
         membership.executeUpdateBucketInfo();
 
         assertEq(address(membership.bucketInfo()), address(newBucketInfo));
@@ -678,10 +629,8 @@ contract PureMembershipTest is Test {
     function test_RevertUpdateBucketInfoUnauthorized() public {
         MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
 
-        // Set bucketInfo owner to owner (test contract)
         bucketInfo.setOwner(owner);
 
-        // user1 is not bucketInfo owner, should revert
         vm.prank(user1);
         vm.expectRevert(PureMembership.UnauthorizedBucketInfoUpdate.selector);
         membership.proposeUpdateBucketInfo(address(newBucketInfo));
@@ -710,15 +659,13 @@ contract PureMembershipTest is Test {
         membership.executeUpdateBucketInfo();
     }
 
-    /// @notice D3's veto window: this contract's OWN owner may cancel a proposed repoint
-    /// before it executes.
     function test_VetoUpdateBucketInfoByOwner() public {
         MockBucketInfoForMembership newBucketInfo = new MockBucketInfoForMembership();
         bucketInfo.setOwner(owner);
 
         membership.proposeUpdateBucketInfo(address(newBucketInfo));
 
-        vm.prank(owner); // membership.owner()
+        vm.prank(owner);
         membership.vetoUpdateBucketInfo();
 
         vm.warp(block.timestamp + membership.BUCKET_INFO_UPDATE_TIMELOCK_DELAY());
@@ -733,8 +680,8 @@ contract PureMembershipTest is Test {
         bucketInfo.setOwner(owner);
         membership.proposeUpdateBucketInfo(address(newBucketInfo));
 
-        vm.prank(user1); // user1 is not membership.owner()
-        vm.expectRevert(); // OwnableUpgradeable.OwnableUnauthorizedAccount
+        vm.prank(user1);
+        vm.expectRevert();
         membership.vetoUpdateBucketInfo();
     }
 
@@ -751,7 +698,6 @@ contract PureMembershipTest is Test {
         vm.prank(user1);
         membership.buyMembership{value: expectedPayment + extraEth}(BASIC_ID, address(0), 0);
 
-        // Excess should be refunded
         uint256 ethSpent = ethBefore - user1.balance;
         assertEq(ethSpent, expectedPayment);
         assertTrue(membership.checkMembershipStatus(user1, BASIC_LEVEL));
@@ -781,12 +727,6 @@ contract PureMembershipTest is Test {
                 RENEWAL BOUNDARY TEST (max(expiry, now))
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice At the exact instant membershipExpiry == block.timestamp, buyMembership
-    /// must take the "new purchase" branch (expiry = now + duration), not the "renew"
-    /// branch -- i.e. max(existingExpiry, block.timestamp) resolves to block.timestamp,
-    /// not to a stale existingExpiry that equals it. This is the boundary the existing
-    /// test_RenewMembership (renew-while-active) and test_BuyAfterExpired (renew-after-
-    /// expiry) tests do not exercise: both warp strictly past expiry, never exactly to it.
     function test_BuyMembershipExactlyAtExpiryBoundary() public {
         uint256 expectedPayment = 10e6;
 
@@ -795,16 +735,11 @@ contract PureMembershipTest is Test {
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         uint256 firstExpiry = membership.membershipExpiry(user1, BASIC_ID);
 
-        // Warp to exactly the first expiry timestamp (neither before nor after it).
         vm.warp(firstExpiry);
         membership.buyMembership(BASIC_ID, address(payToken), 0);
         vm.stopPrank();
 
         uint256 secondExpiry = membership.membershipExpiry(user1, BASIC_ID);
-        // max(firstExpiry, block.timestamp) == max(firstExpiry, firstExpiry) == firstExpiry,
-        // so the new expiry is block.timestamp + duration == firstExpiry + duration -- the
-        // same arithmetic result as compounding, confirming the boundary is not a lost-time
-        // or back-dating defect either way.
         assertEq(secondExpiry, block.timestamp + BASIC_DURATION);
         assertEq(secondExpiry, firstExpiry + BASIC_DURATION);
     }
@@ -814,7 +749,6 @@ contract PureMembershipTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_MaxPaymentAmountDefaultsToUnlimited() public view {
-        // Storage default is 0, which this contract treats as "no owner-side cap".
         assertEq(membership.maxPaymentAmount(), 0);
     }
 
@@ -833,7 +767,7 @@ contract PureMembershipTest is Test {
 
     function test_BuyMembershipWithinOwnerCap() public {
         uint256 expectedPayment = 10e6;
-        membership.setMaxPaymentAmount(expectedPayment); // exactly equal to payment: allowed
+        membership.setMaxPaymentAmount(expectedPayment);
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
@@ -845,7 +779,7 @@ contract PureMembershipTest is Test {
 
     function test_RevertBuyMembershipExceedsOwnerCap() public {
         uint256 expectedPayment = 10e6;
-        membership.setMaxPaymentAmount(expectedPayment - 1); // one unit below the real cost
+        membership.setMaxPaymentAmount(expectedPayment - 1);
 
         vm.startPrank(user1);
         payToken.approve(address(membership), expectedPayment);
@@ -952,13 +886,6 @@ contract PureMembershipTest is Test {
     /*//////////////////////////////////////////////////////////////
                 UPGRADE GOVERNANCE TESTS — W3.3 (basic)
     //////////////////////////////////////////////////////////////*/
-    // Basic happy-path/revert-path coverage for {queueUpgrade}/{cancelUpgrade}/{_authorizeUpgrade}
-    // per `09-DECISION-LOG.md` §10.1, mirroring ActiveBucket.t.sol/PassiveBucket.t.sol. This
-    // contract carries its OWN standalone copy of the errors (PureMembership.sol has no shared
-    // base to call into), so `PureMembership.UpgradeImplementationMismatch` /
-    // `PureMembership.UpgradeNotApproved`, not `BucketVaultBase`'s. The exhaustive adversarial
-    // suite (namespace isolation, factory-handover regression, renounceOwnership/Ownable2Step
-    // semantics) is task #45's own gate suite, not duplicated here.
 
     function _deployApprovedPureMembershipImplementation() internal returns (address newImpl) {
         newImpl = address(new PureMembership(address(registry)));
@@ -1028,9 +955,6 @@ contract PureMembershipTest is Test {
         membership.upgradeToAndCall(otherImpl, "");
     }
 
-    /// @notice Registry approval is re-checked at EXECUTION time, not just at queue time — a
-    /// mid-window platform revocation actually blocks the upgrade (the plan's own "test 3",
-    /// 04 §5.6.1/§10.1). This is the scenario most likely to be omitted.
     function test_RevertUpgrade_RegistryApprovalRevokedMidWindow() public {
         address newImpl = _deployApprovedPureMembershipImplementation();
 
@@ -1094,15 +1018,6 @@ contract PureMembershipTest is Test {
     /*//////////////////////////////////////////////////////////////
                 UPGRADE GOVERNANCE TESTS — W3 GATE (task #45)
     //////////////////////////////////////////////////////////////*/
-    // Replicated from `ActiveBucket.t.sol`/`PassiveBucket.t.sol`'s equivalent block -- see
-    // ActiveBucket.t.sol's comment header for the full rationale (namespace isolation,
-    // platform-cannot-trigger, renounceOwnership/single-step-Ownable semantics, pause-during-
-    // queue independence). This contract carries its OWN standalone copy of the errors
-    // (PureMembership.sol has no shared base to call into) -- `PureMembership.
-    // RenounceOwnershipDisabled` / `PureMembership.UpgradeNotApproved`, not `BucketVaultBase`'s.
-    // Factory-handover regression (owner() == msg.sender inside the creation transaction) is
-    // already covered by `PureMembershipFactory.t.sol`'s `test_Create_OwnerIsCallerNotFactory` /
-    // `test_Create_OwnerIsNotFactory` -- not duplicated here.
 
     function test_RevertRenounceOwnership() public {
         vm.expectRevert(PureMembership.RenounceOwnershipDisabled.selector);
@@ -1119,7 +1034,6 @@ contract PureMembershipTest is Test {
     }
 
     function test_RevertUpgrade_PlatformCannotTrigger() public {
-        // Reconstruct the same membership configs setUp() builds locally (not stored state).
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](3);
         configs[0] = PureMembership.MembershipConfig(BASIC_ID, BASIC_LEVEL, "Basic", BASIC_PRICE, BASIC_DURATION);
         configs[1] =
@@ -1128,10 +1042,6 @@ contract PureMembershipTest is Test {
 
         bytes memory initData =
             abi.encodeWithSelector(PureMembership.initialize.selector, configs, address(bucketInfo), "");
-        // Task #33: this test deliberately simulates a customer deploying their own proxy
-        // directly (not through the factory) to get a vault the platform does not own. That is
-        // now exactly the shape the bypass fix blocks by default, so `user2` must be explicitly
-        // authorized here -- the point of this test is upgrade-authority, not the bypass itself.
         registry.setAuthorizedFactory(user2, true);
         vm.prank(user2);
         ERC1967Proxy customerProxy = new ERC1967Proxy(address(implementation), initData);

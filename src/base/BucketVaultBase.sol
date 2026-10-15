@@ -475,7 +475,7 @@ abstract contract BucketVaultBase is
     uint256 public constant BUCKET_INFO_UPDATE_TIMELOCK_DELAY = 48 hours;
 
     /**
-    * @notice Propose a BucketInfo address update.
+     * @notice Propose a BucketInfo address update.
      */
     function proposeUpdateBucketInfo(address newBucketInfo) external {
         GovernanceLib.proposeUpdateBucketInfo(
@@ -487,14 +487,14 @@ abstract contract BucketVaultBase is
     }
 
     /**
-    * @notice Veto a pending BucketInfo update.
+     * @notice Veto a pending BucketInfo update.
      */
     function vetoUpdateBucketInfo() external onlyOwnerNotBlacklisted {
         GovernanceLib.vetoUpdateBucketInfo(_getBucketVaultBaseStorage().bucketInfoUpdateTimelock);
     }
 
     /**
-    * @notice Execute a matured BucketInfo update.
+     * @notice Execute a matured BucketInfo update.
      */
     function executeUpdateBucketInfo() external {
         address oldBucketInfo = address(_bucketInfo());
@@ -513,7 +513,7 @@ abstract contract BucketVaultBase is
     uint256 public constant UPGRADE_TIMELOCK_DELAY = 48 hours;
 
     /**
-    * @notice Queue a UUPS upgrade.
+     * @notice Queue a UUPS upgrade.
      */
     function queueUpgrade(address newImplementation) external onlyOwnerNotBlacklisted {
         GovernanceLib.queueUpgrade(
@@ -522,7 +522,7 @@ abstract contract BucketVaultBase is
     }
 
     /**
-    * @notice Cancel a pending upgrade.
+     * @notice Cancel a pending upgrade.
      */
     function cancelUpgrade() external onlyOwnerNotBlacklisted {
         GovernanceLib.cancelUpgrade(_getBucketVaultBaseStorage().upgradeTimelock);
@@ -738,7 +738,7 @@ abstract contract BucketVaultBase is
     }
 
     /**
-    * @notice Redeem shares for a single destination token.
+     * @notice Redeem shares for a single destination token.
      */
     function redeemForStable(uint256 shares, address dstToken, uint256 maxSlippageBps)
         external

@@ -6,10 +6,6 @@ import {ActiveBucket} from "../src/ActiveBucket.sol";
 import {ActiveBucketFactory} from "../src/ActiveBucketFactory.sol";
 import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
-// ============================================================
-//                      MOCK CONTRACTS
-// ============================================================
-
 contract MockBucketInfoForABFactory {
     mapping(address => bool) public whitelisted;
     mapping(address => uint256) public prices;
@@ -62,8 +58,6 @@ contract MockBucketInfoForABFactory {
         operational = _operational;
     }
 
-    // --- W4.2a regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
-    // for the full explanation. Defaults to false.
     mapping(address => bool) public blacklisted;
 
     function isBlacklisted(address account) external view returns (bool) {
@@ -74,8 +68,6 @@ contract MockBucketInfoForABFactory {
         blacklisted[account] = status;
     }
 
-    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
-    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
     function isPotentiallyOutpriced(address) external pure returns (bool) {
         return false;
     }
@@ -127,17 +119,10 @@ contract MockERC20ForABFactory {
     }
 }
 
-// ============================================================
-//                      TEST CONTRACT
-// ============================================================
-
 contract ActiveBucketFactoryTest is Test {
     ActiveBucket public implementation;
     ActiveBucketFactory public factory;
     MockBucketInfoForABFactory public bucketInfo;
-    // W3.3: platform-owned registry ActiveBucket's immutable constructor parameter now
-    // requires. Not exercised by these factory tests -- deployed purely so
-    // `new ActiveBucket(address)` compiles.
     ImplementationRegistry public registry;
     MockERC20ForABFactory public tokenA;
     MockERC20ForABFactory public tokenB;
@@ -158,10 +143,6 @@ contract ActiveBucketFactoryTest is Test {
         address indexed proxy, address indexed owner, address indexed bucketInfo, string name, string symbol
     );
 
-    // -------------------------------------------------------
-    //  Setup
-    // -------------------------------------------------------
-
     function setUp() public {
         deployer = address(this);
         alice = makeAddr("alice");
@@ -179,23 +160,13 @@ contract ActiveBucketFactoryTest is Test {
         registry = new ImplementationRegistry(deployer);
         implementation = new ActiveBucket(address(registry));
         factory = new ActiveBucketFactory(address(implementation), address(bucketInfo));
-        // Task #33 (W1.7 direct-proxy-bypass fix): `initialize()` now requires
-        // `REGISTRY.isAuthorizedFactory(msg.sender)`. Inside `ERC1967Proxy`'s constructor,
-        // delegatecall preserves `msg.sender` as whoever called `new ERC1967Proxy(...)` --
-        // here, `factory` itself (since `createActiveBucket` does that deployment), not the
-        // EOA/test that called `factory.createActiveBucket(...)`.
         registry.setAuthorizedFactory(address(factory), true);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                        CONSTRUCTOR TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Constructor_StoresImplementation() public view {
         assertEq(factory.implementation(), address(implementation));
     }
 
-    // W1.7: bucketInfo is now a constructor parameter, stored immutable.
     function test_Constructor_StoresBucketInfo() public view {
         assertEq(factory.bucketInfo(), address(bucketInfo));
     }
@@ -205,8 +176,6 @@ contract ActiveBucketFactoryTest is Test {
         new ActiveBucketFactory(address(0), address(bucketInfo));
     }
 
-    // W1.7: the constructor's new second parameter gets its own zero-check, independent of
-    // the implementation zero-check above.
     function test_Constructor_ZeroBucketInfoReverts() public {
         vm.expectRevert(ActiveBucketFactory.InvalidBucketInfo.selector);
         new ActiveBucketFactory(address(implementation), address(0));
@@ -220,10 +189,6 @@ contract ActiveBucketFactoryTest is Test {
         address[] memory proxies = factory.getAllDeployedProxies();
         assertEq(proxies.length, 0);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                    CREATE ACTIVE BUCKET TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Create_DeploysProxy() public {
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
@@ -242,8 +207,6 @@ contract ActiveBucketFactoryTest is Test {
         assertTrue(ActiveBucket(payable(proxy)).owner() != address(factory));
     }
 
-    // W1.7: bucketInfo is no longer a caller-supplied createActiveBucket argument -- the created
-    // vault's bucketInfo() getter must equal the FACTORY's own immutable value.
     function test_Create_BucketInfoIsSet() public {
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), address(bucketInfo));
@@ -265,17 +228,10 @@ contract ActiveBucketFactoryTest is Test {
     function test_Create_DefaultPerformanceFee() public {
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         ActiveBucket ab = ActiveBucket(payable(proxy));
-        assertEq(ab.performanceFeeBps(), 1300); // 13% default
+        assertEq(ab.performanceFeeBps(), 1300);
     }
 
-    // W1.7: InvalidBucketInfo now fires at construction time (see
-    // test_Constructor_ZeroBucketInfoReverts), not at create-call time -- there is no longer a
-    // bucketInfo parameter on createActiveBucket to be zero. Superseded, kept as a named marker
-    // so a reader searching for the old test name finds this note instead of a silent deletion.
-    function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public pure {
-        // Intentionally empty: the behaviour this used to assert now lives in
-        // test_Constructor_ZeroBucketInfoReverts.
-    }
+    function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public pure {}
 
     function test_Create_ZeroOneInchReverts() public {
         vm.expectRevert(ActiveBucketFactory.InvalidOneInchRouter.selector);
@@ -287,24 +243,21 @@ contract ActiveBucketFactoryTest is Test {
         vm.prank(alice);
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
 
-        // Verify via returned proxy
         assertEq(ActiveBucket(payable(proxy)).owner(), alice);
         assertEq(factory.deployedProxies(0), proxy);
     }
 
     function test_Create_EmitsEventWithCorrectFields() public {
         vm.prank(alice);
-        vm.expectEmit(false, true, true, false); // skip proxy (unknown), check owner + bucketInfo
+        vm.expectEmit(false, true, true, false);
         emit ActiveBucketCreated(address(0), alice, address(bucketInfo), NAME, SYMBOL);
         factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
     }
 
     function test_Create_ProxyIsIndependentOfImplementation() public {
-        // Calling initialize on the implementation directly should revert (already disabled)
         vm.expectRevert();
         implementation.initialize(address(bucketInfo), mockOneInch, NAME, SYMBOL);
 
-        // But factory deploy still works
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         assertTrue(proxy != address(0));
     }
@@ -315,10 +268,6 @@ contract ActiveBucketFactoryTest is Test {
         assertEq(ab.name(), "My Active Fund");
         assertEq(ab.symbol(), "MAF");
     }
-
-    /*//////////////////////////////////////////////////////////////
-                    TRACKING / DISCOVERY TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Tracking_SingleDeployment() public {
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
@@ -356,10 +305,6 @@ contract ActiveBucketFactoryTest is Test {
         assertEq(proxies[2], proxy3);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    PROXY ISOLATION TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_Isolation_DifferentOwners() public {
         vm.prank(alice);
         address proxyAlice = factory.createActiveBucket(mockOneInch, "Alice Bucket", "ALI");
@@ -381,7 +326,6 @@ contract ActiveBucketFactoryTest is Test {
         ActiveBucket abAlice = ActiveBucket(payable(proxyAlice));
         ActiveBucket abBob = ActiveBucket(payable(proxyBob));
 
-        // Alice pauses her contract
         vm.prank(alice);
         abAlice.pause();
 
@@ -389,11 +333,6 @@ contract ActiveBucketFactoryTest is Test {
         assertFalse(abBob.paused());
     }
 
-    // W1.7: bucketInfo is factory-immutable, so two proxies with different bucketInfo values can
-    // no longer come from the SAME factory instance (that per-call divergence was exactly the
-    // vulnerability the fix closes -- see test_W17_PreFix_DifferentCallersCouldNotDivergeAnyway
-    // below for the direct proof). Two different BucketInfo pointers now require two different
-    // FACTORY instances, each with its own immutable value.
     function test_Isolation_DifferentBucketInfos() public {
         MockBucketInfoForABFactory bucketInfo2 = new MockBucketInfoForABFactory();
         bucketInfo2.addToken(address(0), ETH_PRICE);
@@ -417,12 +356,10 @@ contract ActiveBucketFactoryTest is Test {
         vm.prank(bob);
         address proxyBob = factory.createActiveBucket(mockOneInch, "Bob Bucket", "BOB");
 
-        // Alice tries to pause Bob's contract — should revert
         vm.prank(alice);
         vm.expectRevert();
         ActiveBucket(payable(proxyBob)).pause();
 
-        // Alice can still pause her own
         vm.prank(alice);
         ActiveBucket(payable(proxyAlice)).pause();
         assertTrue(ActiveBucket(payable(proxyAlice)).paused());
@@ -438,12 +375,10 @@ contract ActiveBucketFactoryTest is Test {
         ActiveBucket abAlice = ActiveBucket(payable(proxyAlice));
         ActiveBucket abBob = ActiveBucket(payable(proxyBob));
 
-        // Alice deposits 1 ETH
         vm.deal(alice, 10 ether);
         vm.prank(alice);
         abAlice.deposit{value: 1 ether}(address(0), 0);
 
-        // Alice's proxy has shares; Bob's does not
         assertTrue(abAlice.totalSupply() > 0);
         assertEq(abBob.totalSupply(), 0);
     }
@@ -457,20 +392,14 @@ contract ActiveBucketFactoryTest is Test {
 
         address newRouter = makeAddr("newRouter");
 
-        // Alice tries to set router on Bob's contract — should revert
         vm.prank(alice);
         vm.expectRevert();
         ActiveBucket(payable(proxyBob)).setOneInchRouter(newRouter);
 
-        // Alice can set her own
         vm.prank(alice);
         ActiveBucket(payable(proxyAlice)).setOneInchRouter(newRouter);
         assertEq(ActiveBucket(payable(proxyAlice)).oneInchRouter(), newRouter);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                        FUZZ TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function testFuzz_Create_ArbitraryCallerBecomesOwner(address caller) public {
         vm.assume(caller != address(0));
@@ -493,18 +422,6 @@ contract ActiveBucketFactoryTest is Test {
         assertEq(factory.getAllDeployedProxies().length, count);
     }
 
-    /*//////////////////////////////////////////////////////////////
-            W1.7 -- FACTORY-IMMUTABLE BUCKETINFO POINTER TESTS
-       See root CLAUDE.md §1.1 (the precondition under the ownership table) and
-       src/ActiveBucketFactory.sol `bucketInfo` doc comment for the full rationale.
-    //////////////////////////////////////////////////////////////*/
-
-    // (1) The old caller-supplied-bucketInfo call shape no longer exists as a Solidity function
-    // signature -- every call site above in this file already had to drop the leading
-    // `address(bucketInfo)` argument for the whole file to compile (see git diff on this file).
-    // This test additionally proves it at the ABI level: encoding the OLD 4-argument call
-    // (address,address,string,string) and sending it as raw calldata must revert, because no
-    // function selector in the deployed factory matches it and the factory has no fallback.
     function test_W17_OldFourArgCallShapeNoLongerResolvesToAnySelector() public {
         bytes memory oldShapeCalldata = abi.encodeWithSignature(
             "createActiveBucket(address,address,string,string)", address(bucketInfo), mockOneInch, NAME, SYMBOL
@@ -513,47 +430,22 @@ contract ActiveBucketFactoryTest is Test {
         assertFalse(success, "old 4-arg createActiveBucket selector must not resolve post-W1.7");
     }
 
-    // (2) The created vault's bucketInfo() getter equals the FACTORY's own immutable value.
-    // (Already covered functionally by test_Create_BucketInfoIsSet above; restated here under the
-    // W1.7 name so the wave's required test list is directly greppable.)
     function test_W17_VaultBucketInfoGetterEqualsFactoryImmutable() public {
         vm.prank(alice);
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
     }
 
-    // (3) The ActiveBucketCreated event's bucketInfo field matches the factory's immutable value,
-    // not any value the caller might have tried to supply.
     function test_W17_CreatedEventBucketInfoFieldMatchesFactoryImmutable() public {
         vm.expectEmit(false, true, true, true);
         emit ActiveBucketCreated(address(0), address(this), factory.bucketInfo(), NAME, SYMBOL);
         factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
     }
 
-    // (4) Pre-fix-vulnerability proof. Before W1.7, createActiveBucket accepted a caller-supplied
-    // `bucketInfoAddr` with only a zero-address check (ActiveBucketFactory.sol, pre-fix :51/:56)
-    // -- any caller could deploy a vault wired to a BucketInfo-shaped contract THEY control,
-    // defeating the 00:44 oracle protection (root CLAUDE.md §1.1, updateBucketInfo is gated on
-    // *BucketInfo's* owner precisely so a vault owner cannot swap the price feed). This test
-    // constructs exactly such an attacker-controlled mock -- one that reports itself as
-    // "operational" and would happily serve manipulated prices -- and demonstrates that under the
-    // fixed factory there is NO parameter through which it can reach a created vault: every proxy
-    // this factory creates is wired to `factory.bucketInfo()`, deployed once by whoever deployed
-    // the factory (an untrusted vault customer per root CLAUDE.md §1.1's ownership table cannot
-    // reach it at create-call time at all).
     function test_W17_PreFixVulnerability_AttackerControlledBucketInfoCannotBeInjectedAtCreateTime() public {
-        // The attacker deploys their own BucketInfo-shaped contract, e.g. to serve a manipulated
-        // price and rug-pull investors in a vault they trick into using it.
         MockBucketInfoForABFactory attackerBucketInfo = new MockBucketInfoForABFactory();
-        attackerBucketInfo.addToken(address(0), 1); // attacker sets an absurd, self-serving price
+        attackerBucketInfo.addToken(address(0), 1);
 
-        // Pre-fix, the attacker could call:
-        //   factory.createActiveBucket(address(attackerBucketInfo), mockOneInch, NAME, SYMBOL)
-        // and the resulting vault would be permanently wired to their hostile BucketInfo.
-        // Post-fix, createActiveBucket has no bucketInfo parameter at all -- the attacker, acting
-        // as an ordinary (untrusted) caller, can only ever get a vault wired to
-        // `factory.bucketInfo()`, which was fixed at FACTORY DEPLOYMENT TIME by whoever deployed
-        // the factory, not by them.
         vm.prank(makeAddr("attacker"));
         address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
 

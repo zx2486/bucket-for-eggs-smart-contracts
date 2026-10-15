@@ -1,23 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-// W5.2 (SC-9, task #64): dedicated unit coverage for `BucketVaultBase.redeemForStable()`.
-//
-// New, self-contained file rather than additions to the existing (large) PassiveBucket.t.sol /
-// ActiveBucket.t.sol — this file owns and defines its OWN mocks (root CLAUDE.md hard rule 6),
-// following the established convention in this repo (see OneInchSwapSecurity.t.sol) of each
-// test file keeping its own fixtures rather than importing another test file's, to avoid
-// merge-conflict risk and cross-file coupling.
-//
-// Key platform constraint this file's design works around (root CLAUDE.md hard rule 12 / A4):
-// NO allowance is ever granted to the 1inch router for ANY token, so an ERC20-sourced swap leg
-// always reverts in reality. Only a native-ETH-sourced leg (`srcToken == address(0)`) can ever
-// succeed, since the router call carries `value: amount` directly. `FairValueOneInchRouter`
-// below mirrors this exactly: it performs a genuine zero-slippage, oracle-priced conversion for
-// a native-ETH-sourced leg, and genuinely fails an ERC20-sourced leg via a real `transferFrom`
-// that reverts for lack of allowance (not a hardcoded `require(false)`) — the same mechanism a
-// real router would hit.
-
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
@@ -26,12 +9,6 @@ import {BucketVaultBase} from "../src/base/BucketVaultBase.sol";
 import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 import {BucketInfo} from "../src/BucketInfo.sol";
 
-// ============================================================
-//                      MOCK CONTRACTS
-// ============================================================
-
-/// @dev Same shape as MockBucketInfoForPassive/MockBucketInfoForActive in the sibling test
-/// files — duplicated here deliberately (hard rule 6) rather than imported.
 contract MockBucketInfoRFS {
     mapping(address => bool) public whitelisted;
     mapping(address => uint256) public prices;
@@ -155,19 +132,6 @@ contract MockERC20RFS {
     }
 }
 
-/// @dev Fair-value 1inch router mock: performs a genuine zero-slippage, zero-fee conversion
-/// using oracle prices the test configures via `setPrice`, so `redeemForStable`'s multi-leg
-/// accumulation logic can be exercised with an actually-successful swap. Function signature
-/// matches `BucketVaultBase.ONEINCH_SWAP_SELECTOR` exactly
-/// (`execute1inchSwap(address,address,address,uint256,uint256)`), so Solidity's own selector
-/// derivation lines up with the vault's hand-built calldata without any extra wiring here.
-///
-/// Deliberately does NOT special-case the ERC20-`srcToken` path into some shortcut success —
-/// it genuinely attempts `MockERC20RFS.transferFrom(vault, router, amount)`, exactly as a real
-/// 1inch router would to pull its input, which genuinely reverts (arithmetic underflow on the
-/// zero allowance) because hard rule 12 means the vault never approves this router for
-/// anything. This is the SAME mechanism — not a stand-in for it — that makes every ERC20-sourced
-/// 1inch swap in the real contracts revert today (A4).
 contract FairValueOneInchRouter {
     mapping(address => uint256) public price; // 8-decimal USD price; address(0) = native ETH
     mapping(address => uint8) public tokenDecimals;
@@ -187,9 +151,6 @@ contract FairValueOneInchRouter {
         if (srcToken == address(0)) {
             require(msg.value == amount, "router: bad native value");
         } else {
-            // Genuinely attempts the pull a real router would make. The vault never approves
-            // this router (hard rule 12), so this reverts with an arithmetic-underflow panic —
-            // exactly how an ERC20-sourced leg fails against the real router today.
             MockERC20RFS(srcToken).transferFrom(msg.sender, address(this), amount);
         }
 
@@ -199,7 +160,6 @@ contract FairValueOneInchRouter {
         uint8 srcDec = tokenDecimals[srcToken];
         uint8 dstDec = tokenDecimals[dstToken];
 
-        // Multiply before dividing (workspace CLAUDE.md §6) — exact zero-slippage conversion.
         amountOut = (amount * srcPrice * (10 ** dstDec)) / ((10 ** srcDec) * dstPrice);
         require(amountOut >= minReturn, "router: below minReturn");
 
@@ -213,10 +173,6 @@ contract FairValueOneInchRouter {
 
     receive() external payable {}
 }
-
-// ============================================================
-//                      TEST CONTRACT
-// ============================================================
 
 contract RedeemForStableTest is Test {
     BucketInfo public feeBucketInfo;
@@ -234,13 +190,6 @@ contract RedeemForStableTest is Test {
     address public owner;
     address public user1;
 
-    // Owner-accountability tests (§5 below) call `redeemForStable(..., address(0), ...)`
-    // directly as `owner == address(this)` (no `vm.prank`), so a successful ETH-denominated
-    // redemption pays this test contract itself via `_transferToken`'s low-level
-    // `.call{value: amount}("")` (BucketVaultBase.sol:751). forge-std's `Test` base declares no
-    // `receive`/`fallback` (verified: zero matches across `lib/forge-std/src`), so without this,
-    // that payout leg reverts `ETHTransferFailed()` for lack of a receiver — not a source bug,
-    // just this test contract needing to be able to hold ETH like any other owner would.
     receive() external payable {}
 
     uint256 constant ETH_PRICE = 2000e8; // $2000, 8-decimal USD
@@ -268,14 +217,9 @@ contract RedeemForStableTest is Test {
         router.setPrice(address(stable), STABLE_PRICE, 6);
 
         registry = new ImplementationRegistry(owner);
-        // Task #33 (W1.7 direct-proxy-bypass fix): `_deployPassive()`/`_deployActive()` below
-        // deploy proxies directly, so the test contract itself must be an authorized "factory".
         registry.setAuthorizedFactory(address(this), true);
     }
 
-    /// @dev Deploys a fresh PassiveBucket (ETH 50% / tokenA 30% / stable 20%) wired to the
-    /// shared mocks from setUp(). Each test calls this itself — rather than one shared
-    /// setUp()-deployed instance — since several tests need DIFFERENT router/token funding.
     function _deployPassive() internal {
         passiveImpl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -289,8 +233,6 @@ contract RedeemForStableTest is Test {
         passive = PassiveBucket(payable(address(proxy)));
     }
 
-    /// @dev Deploys a fresh ActiveBucket wired to the shared mocks from setUp(). ActiveBucket
-    /// has no distribution concept — deposit() accepts any `isTokenValid` token directly.
     function _deployActive() internal {
         activeImpl = new ActiveBucket(address(registry));
         bytes memory initData = abi.encodeWithSelector(
@@ -306,12 +248,7 @@ contract RedeemForStableTest is Test {
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(stable), 50);
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector,
-            address(bucketInfo),
-            dists,
-            address(router),
-            "Fee Share",
-            "fBKT"
+            PassiveBucket.initialize.selector, address(bucketInfo), dists, address(router), "Fee Share", "fBKT"
         );
         bucket = PassiveBucket(payable(address(new ERC1967Proxy(address(implementation), initData))));
     }
@@ -343,21 +280,6 @@ contract RedeemForStableTest is Test {
         stable.mint(address(router), 1_000_000e6);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    1. MULTI-LEG REDEMPTION, GENUINE SUCCESS
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice A two-asset basket (ETH, stable) redeemed for `stable`: the stable leg takes the
-    /// "already dstToken" skip path, the ETH leg genuinely swaps via the zero-slippage
-    /// `FairValueOneInchRouter`. Asserts the returned/transferred total matches an INDEPENDENTLY
-    /// computed pro-rata + fair-value figure, not a hardcoded number.
-    ///
-    /// Deliberately does NOT also deposit `tokenA`: hard rule 12 / A4 means an ERC20-sourced
-    /// 1inch leg always reverts for lack of allowance (the vault never approves the router for
-    /// any token) — that is exactly what `test_RedeemForStable_RevertsNotPartialFill_WhenLegSwapFails`
-    /// exercises below. A "genuine success" test can therefore only ever contain a native-ETH leg
-    /// plus a dstToken skip-path leg; adding a second ERC20 that needs swapping would make this
-    /// test assert something the real contract cannot do today.
     function test_RedeemForStable_MultiLegRedemption_Success() public {
         _deployPassive();
         stable.mint(address(router), 1_000_000e6);
@@ -372,25 +294,14 @@ contract RedeemForStableTest is Test {
         uint256 shares = passive.balanceOf(user1);
         uint256 supply = passive.totalSupply();
 
-        // Independently reproduce `_previewRedeemCore`'s exact `(balance * shares) / supply`
-        // formula off the vault's own live balances.
         uint256 ethAmount = (address(passive).balance * shares) / supply;
         uint256 stableAmount = (stable.balanceOf(address(passive)) * shares) / supply;
 
-        // Same zero-slippage conversion formula `FairValueOneInchRouter` itself uses.
         uint256 ethLegOut = (ethAmount * ETH_PRICE * (10 ** 6)) / ((10 ** 18) * STABLE_PRICE);
         uint256 expectedTotal = stableAmount + ethLegOut;
 
         uint256 stableBefore = stable.balanceOf(user1);
 
-        // NOT 100 bps: `minReturnForStableLeg` rounds a USD value DOWN into a dstToken amount,
-        // and `validateSwapLeg` independently rounds that token amount back UP into USD to
-        // compare against its own freshly-derived floor (SwapExecutionLib.sol:208-235, :133-177)
-        // — a lossy USD->token->USD round trip that can only ever lose value. At exactly the
-        // 100bps floor there is zero margin to absorb that loss, so this reverts
-        // `MinReturnBelowFloor` by a few raw units even though the swap is genuinely fair-value.
-        // 50bps leaves a comfortable margin above that rounding noise while still exercising a
-        // real (non-trivial) caller-chosen tolerance.
         vm.prank(user1);
         uint256 totalStableOut = passive.redeemForStable(shares, address(stable), 50);
 
@@ -398,10 +309,6 @@ contract RedeemForStableTest is Test {
         assertEq(stable.balanceOf(user1) - stableBefore, expectedTotal, "actual transfer must match returned total");
         assertEq(passive.balanceOf(user1), 0, "all redeemed shares must be burned");
     }
-
-    /*//////////////////////////////////////////////////////////////
-                  BUCKETINFO STABLE-FEE WITHDRAWAL
-    //////////////////////////////////////////////////////////////*/
 
     function test_WithdrawAccumulatedFeesToStable_RedeemsAndTransfers() public {
         _setUpFeeWithdrawalPrices();
@@ -492,10 +399,6 @@ contract RedeemForStableTest is Test {
         assertEq(stable.balanceOf(user1), stableBefore);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    2. dstToken WHITELIST PRECONDITION
-    //////////////////////////////////////////////////////////////*/
-
     function test_RedeemForStable_RevertsIfDstTokenNotWhitelisted() public {
         _deployPassive();
 
@@ -524,12 +427,6 @@ contract RedeemForStableTest is Test {
         active.redeemForStable(shares, notWhitelisted, 100);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    3. SLIPPAGE: TIGHTENS, NEVER LOOSENS, THE FLOOR
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice A tighter-than-platform-floor `maxSlippageBps` (10 bps vs. the hardcoded 100 bps)
-    /// must still succeed against a genuinely fair (zero-slippage) swap.
     function test_RedeemForStable_TighterSlippage_Succeeds() public {
         _deployPassive();
         stable.mint(address(router), 1_000_000e6);
@@ -548,12 +445,6 @@ contract RedeemForStableTest is Test {
         assertEq(totalStableOut, expectedOut, "tighter-than-floor tolerance must still succeed at fair value");
     }
 
-    /// @notice A looser-than-platform-floor `maxSlippageBps` (500 bps vs. the hardcoded 100 bps)
-    /// must revert `MinReturnBelowFloor` — `_validateSwapLeg` always re-derives and enforces its
-    /// own 1% floor regardless of what the caller's own tolerance would have allowed, so a
-    /// looser caller tolerance can never loosen the platform floor. The router is intentionally
-    /// never funded here: the revert happens inside `_validateSwapLeg`, strictly before
-    /// `dispatchSwap`/the router is ever reached.
     function test_RedeemForStable_LooserSlippageThanPlatformFloor_Reverts() public {
         _deployPassive();
 
@@ -562,30 +453,13 @@ contract RedeemForStableTest is Test {
 
         uint256 shares = passive.balanceOf(user1);
 
-        // This forge-std's `vm.expectRevert(bytes4)` requires an EXACT match of the full revert
-        // data (lib/forge-std/src/Vm.sol: "Expects an error on next call that exactly matches the
-        // revert data"), and `MinReturnBelowFloor(uint256,uint256)` reverts with 68 bytes (4-byte
-        // selector + two uint256 args), not 4. `vm.expectPartialRevert` is the selector-prefix
-        // variant ("starts with the revert data") and is what this test actually wants: it only
-        // cares that the right ERROR fired, not the exact USD figures involved.
         vm.prank(user1);
         vm.expectPartialRevert(BucketVaultBase.MinReturnBelowFloor.selector);
         passive.redeemForStable(shares, address(stable), 500);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    4. ATOMICITY — NO PARTIAL FILLS
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice When one leg's swap fails (here: the router cannot pay out `stable` because it
-    /// was deliberately left unfunded), the ENTIRE call reverts — shares stay unburned and every
-    /// basket balance is untouched. There is no try/catch anywhere in `redeemForStable`, so this
-    /// is not merely the expected outcome but a structural guarantee the function's own doc
-    /// comment claims; this test is the proof.
     function test_RedeemForStable_RevertsNotPartialFill_WhenLegSwapFails() public {
         _deployPassive();
-        // Deliberately NOT funding `router` with `stable` — the first non-skip leg's payout
-        // will fail.
 
         tokenA.mint(user1, 100e18);
         vm.startPrank(user1);
@@ -607,14 +481,6 @@ contract RedeemForStableTest is Test {
         assertEq(tokenA.balanceOf(address(passive)), tokenABefore, "tokenA balance must be unchanged after revert");
     }
 
-    /*//////////////////////////////////////////////////////////////
-                    5. OWNER-ACCOUNTABILITY PARITY / DEVIATION
-    //////////////////////////////////////////////////////////////*/
-
-    /// @notice Mirrors PassiveBucket.t.sol's `test_OwnerRedeemAccountabilityCheck` pattern
-    /// exactly, but through `redeemForStable` with `dstToken == address(0)` (ETH) — every leg is
-    /// then the "already dstToken" skip path, so this isolates the accountability guard itself
-    /// with no router interaction at all.
     function test_RedeemForStable_OwnerAccountabilityParity_PassiveBucket() public {
         _deployPassive();
 
@@ -631,11 +497,6 @@ contract RedeemForStableTest is Test {
         passive.redeemForStable(smallRedeem, address(0), 100);
         assertTrue(passive.isBucketAccountable(), "owner should still be accountable after small redeem");
 
-        // `redeemForStable` charges `_enforceSwapCooldown(msg.sender)` once per call
-        // (BucketVaultBase.sol:1779) and `owner` is about to call it a second time — without
-        // clearing CALLER_SWAP_COOLDOWN (5 minutes, BucketVaultBase.sol:251) first, the second
-        // call reverts `SwapCooldownActive` before ever reaching the accountability check this
-        // test means to isolate.
         vm.warp(block.timestamp + 5 minutes + 1);
 
         uint256 remainingOwner = passive.balanceOf(owner);
@@ -649,13 +510,6 @@ contract RedeemForStableTest is Test {
         }
     }
 
-    /// @notice ⚠ Proves the DELIBERATE deviation flagged in `redeemForStable`'s own doc comment:
-    /// `ActiveBucket.redeem()` has NO owner-accountability guard at all today (confirmed via
-    /// source review — no such check exists in `ActiveBucket.redeem()`), but `redeemForStable`
-    /// applies PassiveBucket's stricter before-AND-after `isBucketAccountable()` guard
-    /// unconditionally to BOTH vault types, since the function lives only in `base/` and is
-    /// shared verbatim. Net effect verified here: an ActiveBucket owner is held to a
-    /// restriction `redeem()` itself does not impose on them for this vault type.
     function test_RedeemForStable_OwnerAccountabilityNowApplies_ActiveBucket() public {
         _deployActive();
 
@@ -672,9 +526,6 @@ contract RedeemForStableTest is Test {
         active.redeemForStable(smallRedeem, address(0), 100);
         assertTrue(active.isBucketAccountable(), "owner should still be accountable after small redeem");
 
-        // See the identical comment in the PassiveBucket counterpart above: a second
-        // `redeemForStable` call from the same `msg.sender` without warping past
-        // CALLER_SWAP_COOLDOWN (5 minutes) reverts `SwapCooldownActive`, not `OwnerNotAccountable`.
         vm.warp(block.timestamp + 5 minutes + 1);
 
         uint256 remainingOwner = active.balanceOf(owner);

@@ -707,7 +707,12 @@ contract BucketInfo is Ownable2Step, Pausable {
      * @param dstToken Destination stable token address
      * @param maxSlippageBps Maximum slippage in basis points for the swap
      */
-    function withdrawAccumulatedFeesToStable(address to, address[] memory tokenAddrs, address dstToken, uint256 maxSlippageBps) external onlyOwner {
+    function withdrawAccumulatedFeesToStable(
+        address to,
+        address[] memory tokenAddrs,
+        address dstToken,
+        uint256 maxSlippageBps
+    ) external onlyOwner {
         require(to != address(0), "Invalid recipient");
         require(tokenAddrs.length > 0, "No tokens specified");
         require(dstToken != address(0), "Invalid destination token");

@@ -1,31 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-// W1 (sc-oracle) unit tests: Chainlink round validation, the frozen oracle interface
-// (tryGetTokenPrice / isPotentiallyOutpriced), and the A1 manual-price rate limit.
-//
-// Two related test files exist and are intentionally NOT merged with this one:
-//   - test/BucketInfo.t.sol -- the pre-existing general unit-test suite. Updated in this
-//     wave only where the A1 change touched an existing assertion (the PriceUpdated event
-//     rename).
-//   - test/W0Characterisation.t.sol -- W0's characterisation tests. THREE of them are
-//     EXPECTED to now fail as the hard-rule-13 evidence that this fix landed (see
-//     W1-SC1-ORACLE-REPORT.md `## Evidence`). They are deliberately left failing, not
-//     "fixed" to stay green.
-
 import {Test} from "forge-std/Test.sol";
 import {BucketInfo} from "../src/BucketInfo.sol";
 import {MockV3Aggregator} from "@chainlink/tests/MockV3Aggregator.sol";
 import {AggregatorV3Interface} from "@chainlink/shared/interfaces/AggregatorV3Interface.sol";
 
-/// @dev A hand-rolled AggregatorV3Interface implementation whose five latestRoundData()
-/// fields can be set independently, and which can be made to revert on demand.
-/// MockV3Aggregator (the Chainlink test double used elsewhere in this repo, see
-/// test/W0Characterisation.t.sol) always returns roundId == answeredInRound by
-/// construction (lib/chainlink-brownie-contracts/.../tests/MockV3Aggregator.sol:60-73), so
-/// it cannot express a carried-forward/stale round. This double exists specifically to
-/// cover that case, the updatedAt == 0 case, and the reverting-feed case, without
-/// weakening any assertion on the real MockV3Aggregator path used elsewhere.
 contract ControllableAggregator is AggregatorV3Interface {
     uint8 private _decimals;
     uint80 private _roundId;
@@ -84,7 +64,6 @@ contract W1OracleValidationTest is Test {
     BucketInfo public bucketInfo;
     address public nativeToken;
 
-    // Mirrors BucketInfo.sol's event declarations for vm.expectEmit use.
     event TokenPriceInitialized(address indexed token, uint256 price);
     event TokenPriceUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
 
@@ -94,9 +73,6 @@ contract W1OracleValidationTest is Test {
         vm.warp(1000 days); // clear of genesis so timestamp subtraction cannot underflow
     }
 
-    /// @dev W3.4 turned setPriceFeed into propose+timelock+execute. This helper reproduces
-    /// the old one-call setup semantics for tests that are about oracle validation, not about
-    /// the timelock itself -- propose, warp past PLATFORM_SETTER_TIMELOCK_DELAY, execute.
     function _setPriceFeed(address token, address feed) internal {
         bucketInfo.proposePriceFeed(token, feed);
         vm.warp(block.timestamp + bucketInfo.PLATFORM_SETTER_TIMELOCK_DELAY());
@@ -128,8 +104,6 @@ contract W1OracleValidationTest is Test {
     }
 
     function test_RevertGetTokenPriceOnStaleRound() public {
-        // answeredInRound < roundId: a carried-forward round the aggregator has not
-        // actually refreshed for this roundId.
         ControllableAggregator feed = new ControllableAggregator(8);
         _setPriceFeed(nativeToken, address(feed));
 
@@ -140,7 +114,6 @@ contract W1OracleValidationTest is Test {
     }
 
     function test_RevertGetTokenPriceOnIncompleteRound() public {
-        // updatedAt == 0: the round has started but never completed.
         ControllableAggregator feed = new ControllableAggregator(8);
         _setPriceFeed(nativeToken, address(feed));
 
@@ -163,12 +136,9 @@ contract W1OracleValidationTest is Test {
     function test_GetTokenPriceSucceedsExactlyAtStalenessBoundary() public {
         MockV3Aggregator feed = new MockV3Aggregator(8, 100e8);
         _setPriceFeed(nativeToken, address(feed));
-        // _setPriceFeed's own PLATFORM_SETTER_TIMELOCK_DELAY warp already moved block.timestamp
-        // far past the feed's construction-time updatedAt -- refresh it to "now" so the
-        // boundary warp below tests the STALENESS boundary, not a leftover timelock delay.
         feed.updateAnswer(100e8);
 
-        vm.warp(block.timestamp + bucketInfo.DEFAULT_MAX_PRICE_STALENESS()); // exactly at the boundary
+        vm.warp(block.timestamp + bucketInfo.DEFAULT_MAX_PRICE_STALENESS());
 
         assertEq(bucketInfo.getTokenPrice(nativeToken), 100e8);
     }
@@ -176,10 +146,10 @@ contract W1OracleValidationTest is Test {
     function test_SetMaxPriceStalenessWidensWindowPerToken() public {
         MockV3Aggregator feed = new MockV3Aggregator(8, 100e8);
         _setPriceFeed(nativeToken, address(feed));
-        feed.updateAnswer(100e8); // refresh past the timelock warp, see boundary test above
+        feed.updateAnswer(100e8);
         bucketInfo.setMaxPriceStaleness(nativeToken, 2 days);
 
-        vm.warp(block.timestamp + 1 days); // past the 1h default, within the 2-day override
+        vm.warp(block.timestamp + 1 days);
 
         assertEq(bucketInfo.getTokenPrice(nativeToken), 100e8);
     }
@@ -235,7 +205,7 @@ contract W1OracleValidationTest is Test {
     function test_TryGetTokenPriceReturnsTrueForValidChainlinkPrice() public {
         MockV3Aggregator feed = new MockV3Aggregator(8, 100e8);
         _setPriceFeed(nativeToken, address(feed));
-        feed.updateAnswer(100e8); // refresh past the timelock warp, see boundary test above
+        feed.updateAnswer(100e8);
 
         (bool ok, uint256 price) = bucketInfo.tryGetTokenPrice(nativeToken);
         assertTrue(ok);
@@ -286,7 +256,7 @@ contract W1OracleValidationTest is Test {
         bucketInfo.setTokenPrice(nativeToken, 100e8);
         vm.warp(block.timestamp + bucketInfo.MIN_PRICE_UPDATE_INTERVAL());
 
-        uint256 newPrice = 119e8; // +19%, within the 20% cap
+        uint256 newPrice = 119e8;
 
         vm.expectEmit(true, false, false, true);
         emit TokenPriceUpdated(nativeToken, 100e8, newPrice);
@@ -301,7 +271,7 @@ contract W1OracleValidationTest is Test {
         vm.warp(block.timestamp + bucketInfo.MIN_PRICE_UPDATE_INTERVAL());
 
         vm.expectRevert("Price deviation exceeds cap");
-        bucketInfo.setTokenPrice(nativeToken, 121e8); // +21%, over the 20% cap
+        bucketInfo.setTokenPrice(nativeToken, 121e8);
     }
 
     function test_A1_OverCapDownwardUpdateRejected() public {
@@ -309,12 +279,11 @@ contract W1OracleValidationTest is Test {
         vm.warp(block.timestamp + bucketInfo.MIN_PRICE_UPDATE_INTERVAL());
 
         vm.expectRevert("Price deviation exceeds cap");
-        bucketInfo.setTokenPrice(nativeToken, 79e8); // -21%, over the 20% cap
+        bucketInfo.setTokenPrice(nativeToken, 79e8);
     }
 
     function test_A1_BeforeIntervalUpdateRejectedEvenWithinCap() public {
         bucketInfo.setTokenPrice(nativeToken, 100e8);
-        // No warp: same block, well within the cap (+1%), but before MIN_PRICE_UPDATE_INTERVAL.
 
         vm.expectRevert("Price update too soon");
         bucketInfo.setTokenPrice(nativeToken, 101e8);
@@ -334,9 +303,9 @@ contract W1OracleValidationTest is Test {
         uint256[] memory prices = new uint256[](1);
 
         prices[0] = 100e8;
-        bucketInfo.batchSetTokenPrices(tokens, prices); // first-ever, unbounded
+        bucketInfo.batchSetTokenPrices(tokens, prices);
 
-        prices[0] = 121e8; // over the cap, same block (also before the interval)
+        prices[0] = 121e8;
         vm.expectRevert("Price update too soon");
         bucketInfo.batchSetTokenPrices(tokens, prices);
     }

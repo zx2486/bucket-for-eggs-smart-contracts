@@ -23,28 +23,19 @@ contract MockERC20UpgradeableTest is Test {
     );
 
     function setUp() public {
-        // Deploy implementation
         implementation = new MockERC20Upgradeable();
 
-        // Deploy factory
         factory = new MockERC20Factory(address(implementation));
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        IMPLEMENTATION TESTS
-    //////////////////////////////////////////////////////////////*/
-
     function test_Implementation_CannotBeInitialized() public {
-        // Implementation contract should not be initializable due to _disableInitializers()
         MockERC20Upgradeable token = new MockERC20Upgradeable();
 
-        // Try to initialize - should revert
         vm.expectRevert();
         token.initialize("USD Coin", "USDC", 6, 1_000_000, alice);
     }
 
     function test_Proxy_Initialization() public {
-        // Create proxy through factory
         address proxyAddress = factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
         MockERC20Upgradeable token = MockERC20Upgradeable(proxyAddress);
 
@@ -59,7 +50,6 @@ contract MockERC20UpgradeableTest is Test {
         address proxyAddress = factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
         MockERC20Upgradeable token = MockERC20Upgradeable(proxyAddress);
 
-        // Try to reinitialize - should revert
         vm.expectRevert();
         token.initialize("DAI", "DAI", 18, 1_000_000, bob);
     }
@@ -68,35 +58,27 @@ contract MockERC20UpgradeableTest is Test {
         address proxyAddress = factory.createToken("Test Token", "TEST", 18, 0, alice);
         MockERC20Upgradeable token = MockERC20Upgradeable(proxyAddress);
 
-        // Mint tokens
         token.mint(alice, 1000);
 
         assertEq(token.balanceOf(alice), 1000 * 10 ** 18);
     }
 
     function test_Proxy_DifferentDecimals() public {
-        // Test with 6 decimals (USDC)
         address usdcProxy = factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
         MockERC20Upgradeable usdc = MockERC20Upgradeable(usdcProxy);
         assertEq(usdc.decimals(), 6);
         assertEq(usdc.totalSupply(), 1_000_000 * 10 ** 6);
 
-        // Test with 8 decimals (WBTC)
         address wbtcProxy = factory.createToken("Wrapped Bitcoin", "WBTC", 8, 1_000_000, alice);
         MockERC20Upgradeable wbtc = MockERC20Upgradeable(wbtcProxy);
         assertEq(wbtc.decimals(), 8);
         assertEq(wbtc.totalSupply(), 1_000_000 * 10 ** 8);
 
-        // Test with 18 decimals (DAI)
         address daiProxy = factory.createToken("Dai Stablecoin", "DAI", 18, 1_000_000, alice);
         MockERC20Upgradeable dai = MockERC20Upgradeable(daiProxy);
         assertEq(dai.decimals(), 18);
         assertEq(dai.totalSupply(), 1_000_000 * 10 ** 18);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                         FACTORY TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Factory_Deployment() public view {
         assertEq(factory.implementation(), address(implementation));
@@ -104,7 +86,6 @@ contract MockERC20UpgradeableTest is Test {
     }
 
     function test_Factory_CreateToken() public {
-        // Create USDC proxy
         vm.expectEmit(false, false, false, true);
         emit ProxyCreated(address(0), "USD Coin", "USDC", 6, 1_000_000, alice);
 
@@ -121,13 +102,10 @@ contract MockERC20UpgradeableTest is Test {
     }
 
     function test_Factory_CreateMultipleTokens() public {
-        // Create USDC
         address usdcProxy = factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
 
-        // Create DAI
         address daiProxy = factory.createToken("Dai Stablecoin", "DAI", 18, 1_000_000, bob);
 
-        // Create WBTC
         address wbtcProxy = factory.createToken("Wrapped Bitcoin", "WBTC", 8, 1_000_000, alice);
 
         assertEq(factory.getDeployedProxiesCount(), 3);
@@ -136,17 +114,14 @@ contract MockERC20UpgradeableTest is Test {
         MockERC20Upgradeable dai = MockERC20Upgradeable(daiProxy);
         MockERC20Upgradeable wbtc = MockERC20Upgradeable(wbtcProxy);
 
-        // Verify USDC
         assertEq(usdc.symbol(), "USDC");
         assertEq(usdc.decimals(), 6);
         assertEq(usdc.balanceOf(alice), 1_000_000 * 10 ** 6);
 
-        // Verify DAI
         assertEq(dai.symbol(), "DAI");
         assertEq(dai.decimals(), 18);
         assertEq(dai.balanceOf(bob), 1_000_000 * 10 ** 18);
 
-        // Verify WBTC
         assertEq(wbtc.symbol(), "WBTC");
         assertEq(wbtc.decimals(), 8);
         assertEq(wbtc.balanceOf(alice), 1_000_000 * 10 ** 8);
@@ -155,13 +130,10 @@ contract MockERC20UpgradeableTest is Test {
     function test_Factory_DeterministicDeployment() public {
         bytes32 salt = keccak256("USDC");
 
-        // Predict address
         address predicted = factory.predictDeterministicAddress(salt);
 
-        // Create token with salt
         address deployed = factory.createTokenDeterministic("USD Coin", "USDC", 6, 1_000_000, alice, salt);
 
-        // Verify addresses match
         assertEq(predicted, deployed);
 
         MockERC20Upgradeable usdc = MockERC20Upgradeable(deployed);
@@ -181,39 +153,26 @@ contract MockERC20UpgradeableTest is Test {
     }
 
     function test_Factory_ProxiesAreIndependent() public {
-        // Create two tokens
         address usdcProxy = factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
         address daiProxy = factory.createToken("Dai Stablecoin", "DAI", 18, 2_000_000, bob);
 
         MockERC20Upgradeable usdc = MockERC20Upgradeable(usdcProxy);
         MockERC20Upgradeable dai = MockERC20Upgradeable(daiProxy);
 
-        // Transfer USDC
         vm.prank(alice);
         usdc.transfer(bob, 100 * 10 ** 6);
 
-        // Verify USDC balances changed
         assertEq(usdc.balanceOf(alice), 999_900 * 10 ** 6);
         assertEq(usdc.balanceOf(bob), 100 * 10 ** 6);
 
-        // Verify DAI balances unchanged
         assertEq(dai.balanceOf(alice), 0);
         assertEq(dai.balanceOf(bob), 2_000_000 * 10 ** 18);
     }
 
-    /*//////////////////////////////////////////////////////////////
-                           FUZZ TESTS
-    //////////////////////////////////////////////////////////////*/
-
-    function testFuzz_CreateToken(
-        string memory name,
-        string memory symbol,
-        uint8 decimals,
-        uint96 initialSupply // Use uint96 to avoid overflow
-    )
+    function testFuzz_CreateToken(string memory name, string memory symbol, uint8 decimals, uint96 initialSupply)
         public
     {
-        vm.assume(decimals <= 18); // Reasonable decimals range
+        vm.assume(decimals <= 18);
         vm.assume(bytes(name).length > 0 && bytes(name).length < 32);
         vm.assume(bytes(symbol).length > 0 && bytes(symbol).length < 16);
 
@@ -226,10 +185,6 @@ contract MockERC20UpgradeableTest is Test {
         assertEq(token.decimals(), decimals);
         assertEq(token.balanceOf(alice), uint256(initialSupply) * 10 ** decimals);
     }
-
-    /*//////////////////////////////////////////////////////////////
-                          GAS TESTS
-    //////////////////////////////////////////////////////////////*/
 
     function test_Gas_ImplementationDeployment() public {
         uint256 gasBefore = gasleft();
@@ -251,12 +206,10 @@ contract MockERC20UpgradeableTest is Test {
     function test_Gas_MultipleProxyDeployments() public {
         uint256 totalGas = 0;
 
-        // First proxy
         uint256 gas1 = gasleft();
         factory.createToken("USD Coin", "USDC", 6, 1_000_000, alice);
         totalGas += gas1 - gasleft();
 
-        // Second proxy
         uint256 gas2 = gasleft();
         factory.createToken("Dai Stablecoin", "DAI", 18, 1_000_000, bob);
         totalGas += gas2 - gasleft();

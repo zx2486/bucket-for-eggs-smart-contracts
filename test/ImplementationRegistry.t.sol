@@ -5,24 +5,6 @@ import {Test} from "forge-std/Test.sol";
 import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
 
-// ============================================================
-// W3 GATE (task #45) -- dedicated ImplementationRegistry unit tests.
-//
-// Every existing vault test file (ActiveBucket.t.sol/PassiveBucket.t.sol/PureMembership.t.sol)
-// exercises this registry only THROUGH a vault's `_authorizeUpgrade` call path. That leaves the
-// registry's own mapping-level behaviour -- namespace isolation between the three `Kind`s,
-// `onlyOwner` gating on `approve`/`revoke` in isolation from any vault, the zero-address guard,
-// `everApproved`'s historical-index semantics across a revoke, and its `Ownable2Step`/
-// `renounceOwnership` semantics -- with no dedicated coverage anywhere. `grep -rn
-// "ImplementationRegistry.t.sol" test/` returned nothing before this file was written; this
-// closes that gap directly against the registry contract, not through a vault proxy.
-//
-// Root CLAUDE.md §8's table: this is one of exactly TWO `Ownable2Step` contracts in the system
-// (the other is `BucketInfo`) -- D-3 narrowed `Ownable2Step` to `BucketInfo` alone among
-// PRE-EXISTING contracts, and does not reach this registry, which is new work created by
-// `09-DECISION-LOG.md` §10.1a (see ImplementationRegistry.sol's own header comment).
-// ============================================================
-
 contract ImplementationRegistryTest is Test {
     ImplementationRegistry internal registry;
 
@@ -43,10 +25,6 @@ contract ImplementationRegistryTest is Test {
         implA = makeAddr("implA");
         implB = makeAddr("implB");
     }
-
-    /*//////////////////////////////////////////////////////////////
-                        APPROVE / ISAPPROVED
-    //////////////////////////////////////////////////////////////*/
 
     function test_Approve_SetsIsApprovedTrue() public {
         assertFalse(registry.isApproved(IImplementationRegistry.Kind.ActiveBucket, implA));
@@ -81,15 +59,6 @@ contract ImplementationRegistryTest is Test {
         assertFalse(registry.isApproved(IImplementationRegistry.Kind.PassiveBucket, implA));
     }
 
-    /*//////////////////////////////////////////////////////////////
-                        NAMESPACE ISOLATION
-    //////////////////////////////////////////////////////////////*/
-    // 09-DECISION-LOG.md §10.1a / IImplementationRegistry.sol's own header: ActiveBucket,
-    // PassiveBucket, PureMembership are three SEPARATE namespaces inside one mapping, keyed by
-    // the Kind enum. This is the mapping-level half of the gap identified in task #45's
-    // inventory -- the vault-level half already exists as
-    // `test_RevertUpgrade_ApprovedForWrongKind` in each of the three vault test files.
-
     function test_Approve_DoesNotCrossKindNamespaces() public {
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, implA);
 
@@ -99,9 +68,6 @@ contract ImplementationRegistryTest is Test {
     }
 
     function test_Approve_SameAddressIndependentAcrossAllThreeKinds() public {
-        // The SAME implementation address approved for one kind only, then a different kind,
-        // then the third -- confirming each Kind's slice of the mapping is written and read
-        // completely independently of the other two, not just "the first approval wins".
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, implA);
         assertTrue(registry.isApproved(IImplementationRegistry.Kind.ActiveBucket, implA));
         assertFalse(registry.isApproved(IImplementationRegistry.Kind.PassiveBucket, implA));

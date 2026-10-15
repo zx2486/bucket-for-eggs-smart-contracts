@@ -7,7 +7,6 @@ import {PureMembershipFactory} from "../src/PureMembershipFactory.sol";
 import {ImplementationRegistry} from "../src/ImplementationRegistry.sol";
 
 // ============================================================
-//                      MOCK CONTRACTS
 // ============================================================
 
 contract MockBucketInfoForFactory {
@@ -62,8 +61,6 @@ contract MockBucketInfoForFactory {
         operational = _operational;
     }
 
-    // --- W4.2b regression fix (task #61): see PassiveBucket.t.sol's MockBucketInfoForPassive
-    // for the full explanation. Defaults to false.
     mapping(address => bool) public blacklisted;
 
     function isBlacklisted(address account) external view returns (bool) {
@@ -74,8 +71,6 @@ contract MockBucketInfoForFactory {
         blacklisted[account] = status;
     }
 
-    // --- W5-oracle regression fix (same class as task #61's isBlacklisted gap): see
-    // PassiveBucket.t.sol's MockBucketInfoForPassive for the full explanation.
     function isPotentiallyOutpriced(address) external pure returns (bool) {
         return false;
     }
@@ -88,16 +83,12 @@ contract MockBucketInfoForFactory {
 }
 
 // ============================================================
-//                      TEST CONTRACT
 // ============================================================
 
 contract PureMembershipFactoryTest is Test {
     PureMembership public implementation;
     PureMembershipFactory public factory;
     MockBucketInfoForFactory public bucketInfo;
-    // W3.3: platform-owned registry PureMembership's immutable constructor parameter now
-    // requires. Not exercised by these factory tests -- deployed purely so
-    // `new PureMembership(address)` compiles.
     ImplementationRegistry public registry;
 
     address public deployer;
@@ -106,7 +97,6 @@ contract PureMembershipFactoryTest is Test {
 
     string constant URI = "https://api.example.com/metadata/{id}.json";
 
-    // Shared config constants
     uint256 constant BASIC_ID = 1;
     uint256 constant BASIC_LEVEL = 1;
     uint256 constant BASIC_PRICE = 10e8;
@@ -120,7 +110,6 @@ contract PureMembershipFactoryTest is Test {
     event PureMembershipCreated(address indexed proxy, address indexed owner, address indexed bucketInfo, string uri);
 
     // -------------------------------------------------------
-    //  Helpers
     // -------------------------------------------------------
 
     /// @dev Returns a 3-element config array (Basic / Premium / VIP)
@@ -132,7 +121,6 @@ contract PureMembershipFactoryTest is Test {
     }
 
     // -------------------------------------------------------
-    //  Setup
     // -------------------------------------------------------
 
     function setUp() public {
@@ -144,8 +132,6 @@ contract PureMembershipFactoryTest is Test {
         registry = new ImplementationRegistry(deployer);
         implementation = new PureMembership(address(registry));
         factory = new PureMembershipFactory(address(implementation), address(bucketInfo));
-        // Task #33 (W1.7 direct-proxy-bypass fix): see ActiveBucketFactory.t.sol's identical
-        // comment -- `msg.sender` inside `initialize()` is `factory`, not the external caller.
         registry.setAuthorizedFactory(address(factory), true);
     }
 
@@ -157,7 +143,6 @@ contract PureMembershipFactoryTest is Test {
         assertEq(factory.implementation(), address(implementation));
     }
 
-    // W1.7: bucketInfo is now a constructor parameter, stored immutable.
     function test_Constructor_StoresBucketInfo() public view {
         assertEq(factory.bucketInfo(), address(bucketInfo));
     }
@@ -167,8 +152,6 @@ contract PureMembershipFactoryTest is Test {
         new PureMembershipFactory(address(0), address(bucketInfo));
     }
 
-    // W1.7: the constructor's new second parameter gets its own zero-check, independent of the
-    // implementation zero-check above.
     function test_Constructor_ZeroBucketInfoReverts() public {
         vm.expectRevert(PureMembershipFactory.InvalidBucketInfo.selector);
         new PureMembershipFactory(address(implementation), address(0));
@@ -214,7 +197,6 @@ contract PureMembershipFactoryTest is Test {
         address payable proxy = factory.createPureMembership(configs, URI);
 
         assertEq(address(PureMembership(proxy).bucketInfo()), address(bucketInfo));
-        // W1.7: the vault's bucketInfo must equal the FACTORY's own immutable value.
         assertEq(address(PureMembership(proxy).bucketInfo()), factory.bucketInfo());
     }
 
@@ -238,13 +220,9 @@ contract PureMembershipFactoryTest is Test {
         assertEq(premium.duration, PREMIUM_DURATION);
     }
 
-    // W1.7: createPureMembership no longer accepts a caller-supplied BucketInfo address, so there
-    // is nothing left for this call site to revert on. The zero-check now lives on the
-    // constructor's `bucketInfo_` parameter -- see test_Constructor_ZeroBucketInfoReverts above.
     function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public {}
 
     function test_Create_EmptyConfigsAllowed() public {
-        // Zero configs is valid; owner can add configs later
         PureMembership.MembershipConfig[] memory configs = new PureMembership.MembershipConfig[](0);
         address payable proxy = factory.createPureMembership(configs, URI);
         assertEq(PureMembership(proxy).getConfiguredTokenIdCount(), 0);
@@ -253,15 +231,11 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_EmitsEvent() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        // We know the event is emitted but cannot predict the proxy address ahead of time,
-        // so we check that exactly one event with the correct indexed args is emitted.
         vm.recordLogs();
         vm.prank(alice);
         address payable proxy = factory.createPureMembership(configs, URI);
 
-        // Verify the event via the returned proxy address
         assertEq(PureMembership(proxy).owner(), alice);
-        // The proxy must appear in the factory's list
         assertEq(factory.deployedProxies(0), proxy);
     }
 
@@ -269,7 +243,7 @@ contract PureMembershipFactoryTest is Test {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
         vm.prank(alice);
-        vm.expectEmit(false, true, true, false); // skip proxy (unknown), check owner + bucketInfo
+        vm.expectEmit(false, true, true, false);
         emit PureMembershipCreated(address(0), alice, address(bucketInfo), URI);
         factory.createPureMembership(configs, URI);
     }
@@ -277,14 +251,9 @@ contract PureMembershipFactoryTest is Test {
     function test_Create_ProxyIsIndependentOfImplementation() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
 
-        // Calling initialize on the implementation directly should revert (already disabled).
-        // NOTE: PureMembership.initialize() itself is unchanged by W1.7 -- it still takes
-        // bucketInfo as its second parameter. Only the FACTORY's createPureMembership() dropped
-        // the parameter (the factory now supplies its own immutable bucketInfo internally).
         vm.expectRevert();
         implementation.initialize(configs, address(bucketInfo), URI);
 
-        // But factory deploy still works fine
         address payable proxy = factory.createPureMembership(configs, URI);
         assertTrue(proxy != payable(0));
     }
@@ -364,7 +333,6 @@ contract PureMembershipFactoryTest is Test {
         vm.prank(bob);
         address payable proxyBob = factory.createPureMembership(configs, URI);
 
-        // Alice pauses her contract
         vm.prank(alice);
         PureMembership(proxyAlice).pause();
 
@@ -372,9 +340,6 @@ contract PureMembershipFactoryTest is Test {
         assertFalse(PureMembership(proxyBob).paused());
     }
 
-    // W1.7: two different BucketInfo pointers can no longer coexist on ONE factory -- bucketInfo
-    // is factory-immutable. Isolation across BucketInfo pointers is now demonstrated by deploying
-    // two separate factories, each with its own immutable bucketInfo.
     function test_Isolation_DifferentBucketInfos() public {
         MockBucketInfoForFactory bucketInfo2 = new MockBucketInfoForFactory();
         PureMembershipFactory factory2 = new PureMembershipFactory(address(implementation), address(bucketInfo2));
@@ -397,12 +362,10 @@ contract PureMembershipFactoryTest is Test {
         vm.prank(bob);
         address payable proxyBob = factory.createPureMembership(configs, URI);
 
-        // Alice tries to pause Bob's contract — should revert
         vm.prank(alice);
         vm.expectRevert();
         PureMembership(proxyBob).pause();
 
-        // Alice can pause her own contract
         vm.prank(alice);
         PureMembership(proxyAlice).pause();
         assertTrue(PureMembership(proxyAlice).paused());
@@ -415,7 +378,6 @@ contract PureMembershipFactoryTest is Test {
     function testFuzz_Create_ArbitraryCallerBecomesOwner(address caller) public {
         vm.assume(caller != address(0));
         vm.assume(caller.code.length == 0); // EOA
-        // Some addresses may be precompiles — skip
         vm.assume(uint160(caller) > 0xFF);
 
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
@@ -442,11 +404,6 @@ contract PureMembershipFactoryTest is Test {
             W1.7 -- FACTORY-IMMUTABLE BUCKETINFO POINTER TESTS
     //////////////////////////////////////////////////////////////*/
 
-    // (1) The old caller-supplied-bucketInfo call shape no longer resolves to any selector on
-    // this factory. createPureMembership used to be
-    // (PureMembership.MembershipConfig[],address,string) -- 3 args, bucketInfo SECOND (not
-    // first, unlike the other two factories). It is now (PureMembership.MembershipConfig[],string)
-    // -- 2 args. A raw low-level call built against the OLD selector must fail to resolve.
     function test_W17_OldThreeArgCallShapeNoLongerResolvesToAnySelector() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         bytes memory oldShapeCalldata = abi.encodeWithSignature(
@@ -459,8 +416,6 @@ contract PureMembershipFactoryTest is Test {
         assertFalse(success, "old 3-arg createPureMembership selector must not resolve post-W1.7");
     }
 
-    // (2) The resulting vault's bucketInfo() getter equals the FACTORY's own immutable value,
-    // never anything a caller could supply (there is no longer a parameter to supply it through).
     function test_W17_VaultBucketInfoGetterEqualsFactoryImmutable() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.prank(alice);
@@ -468,7 +423,6 @@ contract PureMembershipFactoryTest is Test {
         assertEq(address(PureMembership(proxy).bucketInfo()), factory.bucketInfo());
     }
 
-    // (3) The PureMembershipCreated event's bucketInfo field matches the factory's immutable value.
     function test_W17_CreatedEventBucketInfoFieldMatchesFactoryImmutable() public {
         PureMembership.MembershipConfig[] memory configs = _defaultConfigs();
         vm.expectEmit(false, true, true, true);
@@ -476,14 +430,6 @@ contract PureMembershipFactoryTest is Test {
         factory.createPureMembership(configs, URI);
     }
 
-    // (4) Pre-fix-vulnerability proof: before W1.7, createPureMembership accepted a caller-supplied
-    // BucketInfo address as its second parameter with only a zero-check (no genuineness check).
-    // A malicious caller could point their new membership contract at an attacker-controlled
-    // BucketInfo-shaped contract, defeating the 00:44 oracle protection for that contract's
-    // members. Post-fix, the call signature has no such parameter at all -- the
-    // attacker-controlled contract below is constructed, but there is no way to pass it into
-    // createPureMembership; every membership contract this factory creates is pinned to the
-    // factory's own immutable, platform-supplied bucketInfo.
     function test_W17_PreFixVulnerability_AttackerControlledBucketInfoCannotBeInjectedAtCreateTime() public {
         MockBucketInfoForFactory attackerBucketInfo = new MockBucketInfoForFactory();
         attackerBucketInfo.addToken(address(0), 1);
