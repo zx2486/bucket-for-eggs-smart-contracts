@@ -13,7 +13,8 @@ import {BucketInfo} from "../src/BucketInfo.sol";
 contract VerifyBucketInfo is Script {
     function run() external view {
         // Read the deployed contract address from environment variable or argument
-        address payable bucketInfoAddress = payable(vm.envAddress("BUCKETINFO_ADDRESS"));
+        address payable bucketInfoAddress = payable(vm.envOr("BUCKET_INFO_ADDRESS", address(0)));
+        if (bucketInfoAddress == address(0)) revert("Set BUCKET_INFO_ADDRESS");
 
         BucketInfo bucketInfo = BucketInfo(bucketInfoAddress);
 
@@ -41,8 +42,34 @@ contract VerifyBucketInfo is Script {
             console.log("  Price Feed:", priceFeed);
             console.log("  Is Whitelisted:", bucketInfo.isTokenWhitelisted(token));
         }
+        string memory json = vm.readFile("./configs/sepolia.json");
+        address[] memory targetTokens = new address[](2);
+        targetTokens[0] = _tokenAddress(json, "WBTC");
+        targetTokens[1] = _tokenAddress(json, "ETH");
+        console.log("=== PassiveBucket Target Assets ===");
+        for (uint256 i = 0; i < targetTokens.length; i++) {
+            (bool priceOk, uint256 price) = bucketInfo.tryGetTokenPrice(targetTokens[i]);
+            require(bucketInfo.isTokenWhitelisted(targetTokens[i]), "Target token not whitelisted");
+            require(priceOk && price > 0, "Target token price unavailable");
+            console.log("Token:", targetTokens[i]);
+            console.log("Price USD-8:", price);
+        }
         console.log("");
 
         console.log("=== Verification Complete ===");
+    }
+
+    function _tokenAddress(string memory json, string memory symbol) private pure returns (address) {
+        for (uint256 i = 0; i < 100; i++) {
+            string memory path = string.concat(".tokens[", vm.toString(i), "]");
+            try vm.parseJsonString(json, string.concat(path, ".symbol")) returns (string memory configuredSymbol) {
+                if (keccak256(bytes(configuredSymbol)) == keccak256(bytes(symbol))) {
+                    return vm.parseJsonAddress(json, string.concat(path, ".tokenAddress"));
+                }
+            } catch {
+                break;
+            }
+        }
+        revert("Target token missing from configs/sepolia.json");
     }
 }

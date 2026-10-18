@@ -1,125 +1,126 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
 import {PassiveBucketFactory} from "../src/PassiveBucketFactory.sol";
+import {IBucketInfo} from "../src/interfaces/IBucketInfo.sol";
 import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
+import {SepoliaDeploymentConfig} from "./SepoliaDeploymentConfig.sol";
 
-/**
- * @title DeployPassiveBucketSepolia
- * @notice Deployment script for PassiveBucket on Sepolia testnet via PassiveBucketFactory.
- * @dev Deploys a shared PassiveBucket implementation, deploys PassiveBucketFactory,
- * then calls createPassiveBucket() so the deployer owns the resulting proxy.
- */
-contract DeployPassiveBucketSepolia is Script {
-    // Sepolia addresses (update with actual deployed BucketInfo address)
-    address constant BUCKET_INFO = address(0); // TODO: Set deployed BucketInfo address
-    // W3.3: the platform-owned ImplementationRegistry PassiveBucket's upgrade path checks
-    // against. Immutable, constructor-set on the implementation itself. TODO: Set deployed
-    // ImplementationRegistry address.
-    address constant IMPLEMENTATION_REGISTRY = address(0);
-    address constant ONEINCH_ROUTER_V6 = 0x111111125421cA6dc452d289314280a0f8842A65;
-
-    // Example distribution tokens on Sepolia (update with actual addresses)
-    address constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
-    address constant USDT = 0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0;
-    address constant LINK = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
-
-    // Uniswap V3 on Sepolia
-    address constant UNISWAP_V3_ROUTER = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
-    address constant UNISWAP_V3_QUOTER = 0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3;
-    uint24 constant UNISWAP_V3_FEE = 3000;
-
-    // ERC-20 share token metadata
-    string constant TOKEN_NAME = "PassiveBucket Share";
-    string constant TOKEN_SYMBOL = "pBKT";
+contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
+    struct PassiveConfig {
+        address bucketInfo;
+        address registry;
+        address oneInchRouter;
+        address weth;
+        address dexRouter;
+        address dexQuoter;
+        uint24 dexFee;
+        string name;
+        string symbol;
+    }
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
+        string memory json = _loadSepoliaConfig();
+        PassiveConfig memory config = _loadPassiveConfig(json);
+        PassiveBucket.BucketDistribution[] memory distributions = _loadDistributions(json);
+        require(config.bucketInfo != address(0), "Set deployment.bucketInfoAddress in configs/sepolia.json");
+        require(config.bucketInfo.code.length > 0, "BucketInfo has no code");
+        require(config.registry != address(0), "Set deployment.implementationRegistryAddress in configs/sepolia.json");
+        require(config.oneInchRouter != address(0), "1inch router is zero");
+        require(config.weth != address(0), "WETH is zero");
+        require(config.dexRouter != address(0) && config.dexQuoter != address(0), "DEX router or quoter is zero");
+        require(config.registry.code.length > 0, "ImplementationRegistry has no code");
+        require(config.oneInchRouter.code.length > 0, "1inch router has no code");
+        require(
+            config.dexRouter.code.length > 0 && config.dexQuoter.code.length > 0, "DEX router or quoter has no code"
+        );
+        _requireRegistryOwner(config.registry, deployer);
 
-        // Allow overriding BucketInfo address via env
-        address bucketInfoAddr = vm.envOr("BUCKET_INFO_ADDRESS", BUCKET_INFO);
-        require(bucketInfoAddr != address(0), "Set BUCKET_INFO_ADDRESS env variable");
-
-        address registryAddr = vm.envOr("REGISTRY_ADDRESS", IMPLEMENTATION_REGISTRY);
-        require(registryAddr != address(0), "Set REGISTRY_ADDRESS env variable");
-
-        console.log("=== PassiveBucket Sepolia Deployment (via Factory) ===");
-        console.log("Deployer:", deployer);
-        console.log("BucketInfo:", bucketInfoAddr);
-        console.log("ImplementationRegistry:", registryAddr);
-        console.log("1inch Router:", ONEINCH_ROUTER_V6);
-        console.log("");
-
-        // Prepare initial distributions: 50% ETH, 30% USDT, 20% LINK
-        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
-        dists[0] = PassiveBucket.BucketDistribution(address(0), 50); // 50% ETH
-        dists[1] = PassiveBucket.BucketDistribution(USDT, 30); // 30% USDT
-        dists[2] = PassiveBucket.BucketDistribution(LINK, 20); // 20% LINK
+        for (uint256 i = 0; i < distributions.length; i++) {
+            require(
+                IBucketInfo(config.bucketInfo).isTokenValid(distributions[i].token),
+                "Distribution token is not valid in BucketInfo"
+            );
+            (bool priceOk, uint256 price) = IBucketInfo(config.bucketInfo).tryGetTokenPrice(distributions[i].token);
+            require(priceOk && price > 0, "Distribution token price unavailable");
+        }
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy shared implementation (never initialised directly)
-        console.log("Step 1: Deploying PassiveBucket implementation...");
-        PassiveBucket implementation = new PassiveBucket(registryAddr);
-        console.log("Implementation deployed at:", address(implementation));
+        PassiveBucket implementation = new PassiveBucket(config.registry);
+        PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), config.bucketInfo);
 
-        // Step 2: Deploy the factory
-        // W1.7: bucketInfoAddr is now a constructor-time, factory-immutable parameter, not a
-        // per-call argument to createPassiveBucket -- see src/PassiveBucketFactory.sol `bucketInfo`.
-        console.log("Step 2: Deploying PassiveBucketFactory...");
-        PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), bucketInfoAddr);
-        console.log("Factory deployed at:", address(factory));
+        IImplementationRegistry registry = IImplementationRegistry(config.registry);
+        registry.setAuthorizedFactory(address(factory), true);
+        registry.approve(IImplementationRegistry.Kind.PassiveBucket, address(implementation));
 
-        // Step 2b: Authorize this factory in the ImplementationRegistry (task #33, W1.7
-        // direct-proxy-bypass fix). Without this, every vault's `initialize()` now rejects the
-        // factory's own `new ERC1967Proxy(...)` call with `UnauthorizedInitializer()` -- delegatecall
-        // preserves msg.sender from whoever directly deployed the proxy, which here is the factory
-        // itself, not this script's deployer. This call requires `deployer` to be the registry's
-        // owner; if the platform's ImplementationRegistry is owned by a different key, this step
-        // (and therefore Step 3 below) must instead be run by that owner before this script
-        // proceeds -- it is not something this script can route around.
-        console.log("Step 2b: Authorizing factory in ImplementationRegistry...");
-        IImplementationRegistry(registryAddr).setAuthorizedFactory(address(factory), true);
-
-        // Step 3: Create a PassiveBucket proxy via the factory
-        console.log("Step 3: Creating PassiveBucket proxy via factory...");
-        address proxyAddr = factory.createPassiveBucket(dists, ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
-        PassiveBucket passiveBucket = PassiveBucket(payable(proxyAddr));
-        console.log("Proxy deployed at:", proxyAddr);
-
-        // Step 4: Configure DEXs (owner is now deployer)
-        console.log("Step 4: Configuring Uniswap V3...");
-        passiveBucket.configureDEX(0, UNISWAP_V3_ROUTER, UNISWAP_V3_QUOTER, UNISWAP_V3_FEE, true);
-
-        // Step 5: Set WETH address
-        console.log("Step 5: Setting WETH address...");
-        passiveBucket.setWETH(WETH);
+        address proxy = factory.createPassiveBucket(distributions, config.oneInchRouter, config.name, config.symbol);
+        PassiveBucket bucket = PassiveBucket(payable(proxy));
+        bucket.configureDEX(0, config.dexRouter, config.dexQuoter, config.dexFee, true);
+        bucket.setWETH(config.weth);
 
         vm.stopBroadcast();
 
-        // Summary
-        console.log("");
-        console.log("=== Deployment Summary ===");
-        console.log("Implementation:         ", address(implementation));
-        console.log("Factory:                ", address(factory));
-        console.log("Proxy (PassiveBucket):  ", address(passiveBucket));
-        console.log("Owner:                  ", passiveBucket.owner());
-        console.log("BucketInfo:             ", address(passiveBucket.bucketInfo()));
-        console.log("1inch Router:           ", passiveBucket.oneInchRouter());
-        console.log("WETH:                   ", passiveBucket.weth());
-        console.log("Factory proxy count:    ", factory.getDeployedProxiesCount());
-        console.log("");
+        console.log("PassiveBucket implementation:", address(implementation));
+        console.log("PassiveBucket factory:", address(factory));
+        console.log("PassiveBucket proxy:", proxy);
+        console.log("Owner:", bucket.owner());
+        console.log("BucketInfo:", address(bucket.bucketInfo()));
+        console.log("ImplementationRegistry:", config.registry);
+        console.log("1inch router:", bucket.oneInchRouter());
+        console.log("WETH:", bucket.weth());
+    }
 
-        PassiveBucket.BucketDistribution[] memory storedDists = passiveBucket.getBucketDistributions();
-        console.log("Distributions:");
-        for (uint256 i = 0; i < storedDists.length; i++) {
-            console.log("  Token:", storedDists[i].token, "Weight:", storedDists[i].weight);
+    function _loadPassiveConfig(string memory json) private pure returns (PassiveConfig memory config) {
+        config.bucketInfo = _configuredAddress(json, ".deployment.bucketInfoAddress");
+        config.registry = _configuredAddress(json, ".deployment.implementationRegistryAddress");
+        config.oneInchRouter = vm.parseJsonAddress(json, ".deployment.oneInchRouter");
+        config.name = vm.parseJsonString(json, ".deployment.passiveBucket.name");
+        config.symbol = vm.parseJsonString(json, ".deployment.passiveBucket.symbol");
+        config.weth = vm.parseJsonAddress(json, ".deployment.passiveBucket.weth");
+        config.dexRouter = vm.parseJsonAddress(json, ".deployment.passiveBucket.dexRouter");
+        config.dexQuoter = vm.parseJsonAddress(json, ".deployment.passiveBucket.dexQuoter");
+        config.dexFee = uint24(vm.parseJsonUint(json, ".deployment.passiveBucket.dexFee"));
+    }
+
+    function _loadDistributions(string memory json)
+        private
+        pure
+        returns (PassiveBucket.BucketDistribution[] memory distributions)
+    {
+        uint256 count;
+        for (uint256 i = 0; i < 100; i++) {
+            string memory path = string.concat(".deployment.passiveBucket.distributions[", vm.toString(i), "].weight");
+            try vm.parseJsonUint(json, path) returns (uint256) {
+                count++;
+            } catch {
+                break;
+            }
         }
-        console.log("");
-        console.log("Deployment complete!");
+        require(count > 0, "No passive distributions configured");
+        distributions = new PassiveBucket.BucketDistribution[](count);
+        uint256 weightTotal;
+        for (uint256 i = 0; i < count; i++) {
+            (distributions[i], weightTotal) = _loadDistribution(json, i, weightTotal);
+        }
+        require(weightTotal == 100, "Passive distribution weights must sum to 100");
+    }
+
+    function _loadDistribution(string memory json, uint256 index, uint256 totalWeight)
+        private
+        pure
+        returns (PassiveBucket.BucketDistribution memory distribution, uint256 newTotalWeight)
+    {
+        string memory path = string.concat(".deployment.passiveBucket.distributions[", vm.toString(index), "]");
+        string memory tokenSymbol = vm.parseJsonString(json, string.concat(path, ".symbol"));
+        uint256 weight = vm.parseJsonUint(json, string.concat(path, ".weight"));
+        distribution = PassiveBucket.BucketDistribution(_tokenAddressForSymbol(json, tokenSymbol), weight);
+        newTotalWeight = totalWeight + weight;
+        console.log("Distribution token:", tokenSymbol);
+        console.log("Weight:", weight);
     }
 }

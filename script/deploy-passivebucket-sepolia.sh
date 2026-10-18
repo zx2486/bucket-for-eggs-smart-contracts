@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Complete PassiveBucket Deployment Script for Sepolia
-# Deploys implementation + UUPS proxy and configures DEXs
+# Deploys the implementation, factory, and configured PassiveBucket instance.
 
 set -e
 
@@ -33,23 +33,17 @@ if [ -z "$SEPOLIA_RPC_URL" ]; then
     exit 1
 fi
 
-if [ -z "$BUCKET_INFO_ADDRESS" ]; then
-    echo -e "${RED}Error: BUCKET_INFO_ADDRESS not set in .env${NC}"
-    echo "Deploy BucketInfo first and set BUCKET_INFO_ADDRESS in .env"
-    exit 1
-fi
-
-DEPLOYER=$(cast wallet address --private-key $PRIVATE_KEY)
+DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY")
 
 echo -e "${YELLOW}Deployment Configuration:${NC}"
 echo "Deployer: $DEPLOYER"
 echo "Network: Sepolia"
-echo "BucketInfo: $BUCKET_INFO_ADDRESS"
+echo "Config: configs/sepolia.json"
 echo ""
 
 # Check deployer balance
-BALANCE=$(cast balance $DEPLOYER --rpc-url $SEPOLIA_RPC_URL)
-BALANCE_ETH=$(cast --to-unit $BALANCE ether)
+BALANCE=$(cast balance "$DEPLOYER" --rpc-url "$SEPOLIA_RPC_URL")
+BALANCE_ETH=$(cast --to-unit "$BALANCE" ether)
 echo "Deployer Balance: $BALANCE_ETH ETH"
 echo ""
 
@@ -57,25 +51,19 @@ echo ""
 echo -e "${GREEN}Deploying PassiveBucket...${NC}"
 
 forge script script/DeployPassiveBucketSepolia.s.sol \
-    --rpc-url $SEPOLIA_RPC_URL \
-    --private-key $PRIVATE_KEY \
+    --rpc-url "$SEPOLIA_RPC_URL" \
+    --private-key "$PRIVATE_KEY" \
     --broadcast \
     --verify \
-    --etherscan-api-key $ETHERSCAN_API_KEY \
+    ${ETHERSCAN_API_KEY:+--etherscan-api-key "$ETHERSCAN_API_KEY"} \
     -vvv
 
-# Extract the new proxy and implementation address from the broadcast output
-PROXY_ADDRESS=$(grep "Deployed to:" broadcast/DeployPassiveBucketSepolia.s.sol.txt | awk '{print $3}')
-IMPLEMENTATION_ADDRESS=$(grep "Implementation:" broadcast/DeployPassiveBucketSepolia.s.sol.txt | awk '{print $2}')
-echo "New PassiveBucket Proxy Address: $PROXY_ADDRESS"
-echo "New PassiveBucket Implementation Address: $IMPLEMENTATION_ADDRESS"
+echo "Record the PassiveBucket implementation, factory, and proxy addresses printed above in .env."
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
 echo "Check the broadcast folder for deployment details."
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
-echo "1. Add PASSIVE_BUCKET_PROXY_ADDRESS and PASSIVE_BUCKET_FACTORY_ADDRESS to .env"
+echo "1. Record PASSIVE_BUCKET_PROXY_ADDRESS, PASSIVE_BUCKET_FACTORY_ADDRESS, and PASSIVE_BUCKET_IMPL_ADDRESS in .env"
 echo "2. Run verification: ./script/verify-passivebucket-sepolia.sh"
-echo "3. Run tests: ./script/test-passivebucket-sepolia.sh"
-echo "4. Configure additional DEXs as needed"
-echo "5. Owner should deposit initial funds for accountability"
+echo "3. Review distribution, WETH, and DEX settings from configs/sepolia.json."

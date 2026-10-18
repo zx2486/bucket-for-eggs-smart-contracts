@@ -3,6 +3,7 @@
 # Complete ActiveBucket Deployment Script for Sepolia (via ActiveBucketFactory)
 
 set -e
+cd "$(dirname "$0")/.."
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -17,7 +18,9 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
+set -a
 source .env
+set +a
 
 if [ -z "$PRIVATE_KEY" ]; then
     echo -e "${RED}Error: PRIVATE_KEY not set in .env${NC}"
@@ -29,47 +32,58 @@ if [ -z "$SEPOLIA_RPC_URL" ]; then
     exit 1
 fi
 
-if [ -z "$BUCKET_INFO_ADDRESS" ]; then
-    echo -e "${RED}Error: BUCKET_INFO_ADDRESS not set in .env${NC}"
-    echo "Deploy BucketInfo first and set BUCKET_INFO_ADDRESS in .env"
-    exit 1
-fi
-
-DEPLOYER=$(cast wallet address --private-key $PRIVATE_KEY)
+DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY")
 
 echo -e "${YELLOW}Deployment Configuration:${NC}"
 echo "Deployer: $DEPLOYER"
 echo "Network: Sepolia"
-echo "BucketInfo: $BUCKET_INFO_ADDRESS"
+echo "Config: configs/sepolia.json"
 echo ""
 
-BALANCE=$(cast balance $DEPLOYER --rpc-url $SEPOLIA_RPC_URL)
-BALANCE_ETH=$(cast --to-unit $BALANCE ether)
+BALANCE=$(cast balance "$DEPLOYER" --rpc-url "$SEPOLIA_RPC_URL")
+BALANCE_ETH=$(cast --to-unit "$BALANCE" ether)
 echo "Deployer Balance: $BALANCE_ETH ETH"
 echo ""
 
 echo -e "${GREEN}Deploying ActiveBucket (implementation + factory + proxy)...${NC}"
 
 forge script script/DeployActiveBucketSepolia.s.sol \
-    --rpc-url $SEPOLIA_RPC_URL \
-    --private-key $PRIVATE_KEY \
+    --rpc-url "$SEPOLIA_RPC_URL" \
+    --private-key "$PRIVATE_KEY" \
     --broadcast \
-    --verify \
-    --etherscan-api-key $ETHERSCAN_API_KEY \
     -vvv
 
-# Extract the new proxy and implementation address from the broadcast output
-PROXY_ADDRESS=$(grep "Deployed to:" broadcast/DeployActiveBucketSepolia.s.sol.txt | awk '{print $3}')
-IMPLEMENTATION_ADDRESS=$(grep "Implementation:" broadcast/DeployActiveBucketSepolia.s.sol.txt | awk '{print $2}')
-echo "New ActiveBucket Proxy Address: $PROXY_ADDRESS"
-echo "New ActiveBucket Implementation Address: $IMPLEMENTATION_ADDRESS"
+if [ -n "${ETHERSCAN_API_KEY:-}" ]; then
+    echo "Source verification can be submitted separately with forge verify-contract after recording constructor arguments."
+fi
+
+BROADCAST_FILE="broadcast/DeployActiveBucketSepolia.s.sol/11155111/run-latest.json"
+if [ ! -f "$BROADCAST_FILE" ]; then
+    echo "Broadcast artifact not found: $BROADCAST_FILE" >&2
+    exit 1
+fi
+read -r ACTIVE_BUCKET_IMPL_ADDRESS ACTIVE_BUCKET_FACTORY_ADDRESS < <(python3 - "$BROADCAST_FILE" <<'PY'
+import json, sys
+data=json.load(open(sys.argv[1]))
+created={tx.get("contractName"): tx.get("contractAddress") for tx in data.get("transactions", []) if tx.get("transactionType")=="CREATE"}
+required=("ActiveBucket", "ActiveBucketFactory")
+missing=[name for name in required if not created.get(name)]
+if missing:
+    raise SystemExit("Missing CREATE entries: " + ", ".join(missing))
+print(created["ActiveBucket"], created["ActiveBucketFactory"])
+PY
+)
+ACTIVE_BUCKET_PROXY_ADDRESS=""
+if grep -q '^ACTIVE_BUCKET_IMPL_ADDRESS=' .env; then sed -i.bak "s#^ACTIVE_BUCKET_IMPL_ADDRESS=.*#ACTIVE_BUCKET_IMPL_ADDRESS=$ACTIVE_BUCKET_IMPL_ADDRESS#" .env; else printf '\nACTIVE_BUCKET_IMPL_ADDRESS=%s\n' "$ACTIVE_BUCKET_IMPL_ADDRESS" >> .env; fi
+if grep -q '^ACTIVE_BUCKET_FACTORY_ADDRESS=' .env; then sed -i.bak "s#^ACTIVE_BUCKET_FACTORY_ADDRESS=.*#ACTIVE_BUCKET_FACTORY_ADDRESS=$ACTIVE_BUCKET_FACTORY_ADDRESS#" .env; else printf 'ACTIVE_BUCKET_FACTORY_ADDRESS=%s\n' "$ACTIVE_BUCKET_FACTORY_ADDRESS" >> .env; fi
+rm -f .env.bak
+echo "Implementation: $ACTIVE_BUCKET_IMPL_ADDRESS"
+echo "Factory: $ACTIVE_BUCKET_FACTORY_ADDRESS"
+echo "Proxy address: read the ActiveBucketCreated event in $BROADCAST_FILE and set ACTIVE_BUCKET_PROXY_ADDRESS in .env"
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
 echo "Check the broadcast folder for deployment details."
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
-echo "1. Add ACTIVE_BUCKET_PROXY_ADDRESS and ACTIVE_BUCKET_FACTORY_ADDRESS to .env"
-echo "2. Run verification: ./script/verify-activebucket-sepolia.sh"
-echo "3. Run tests: ./script/test-activebucket-sepolia.sh"
-echo "4. Configure additional DEXs as needed"
-echo "5. Owner should deposit initial funds for accountability"
+echo "1. Run verification: ./script/verify-activebucket-sepolia.sh"
+echo "2. The owner must deposit shares before accountability-gated operations."

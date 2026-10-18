@@ -25,14 +25,10 @@ contract DeployBucketInfo is Script {
     function run() external {
         // Read environment variables
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        string memory network = vm.envOr("NETWORK", string("sepolia"));
-
-        // Load network configuration
-        string memory configPath = string.concat("./configs/", network, ".json");
+        string memory configPath = vm.envOr("DEPLOYMENT_CONFIG", string("./configs/sepolia.json"));
         string memory json = vm.readFile(configPath);
 
         console.log("=== BucketInfo Deployment ===");
-        console.log("Network:", network);
         console.log("Config file:", configPath);
         console.log("");
 
@@ -75,20 +71,18 @@ contract DeployBucketInfo is Script {
         console.log("BucketInfo deployed at:", address(bucketInfo));
         console.log("");
 
-        // W3.4: setPlatformFee/batchSetTokenWhitelist/batchSetPriceFeeds no longer exist --
-        // every one of these is now propose-then-wait-then-execute (root CLAUDE.md §8: "Build
-        // timelocks instead"). This deployment step only PROPOSES; a separate invocation of
-        // {runExecute} below (same config, run again after PLATFORM_SETTER_TIMELOCK_DELAY has
-        // elapsed) applies the proposals. This is a deliberate two-step deployment, not a bug.
         bucketInfo.proposePlatformFee(platformFee);
         console.log("Platform fee PROPOSED:", platformFee, "basis points -- execute after the timelock elapses");
         console.log("");
 
-        // Configure tokens and price feeds
-        console.log("Proposing token whitelist + price feed configuration...");
-        bucketInfo.batchProposeWhitelistAdditions(tokenAddresses);
-        bucketInfo.proposeBatchPriceFeeds(tokenAddresses, priceFeeds);
-        console.log("Proposed configuration for", tokenCount, "tokens -- run runExecute() after the timelock elapses");
+        console.log("Proposing token whitelist additions...");
+        for (uint256 i = 0; i < tokenCount; i++) {
+            if (!bucketInfo.isTokenWhitelisted(tokenAddresses[i])) {
+                bucketInfo.proposeWhitelistAddition(tokenAddresses[i]);
+            }
+        }
+        console.log("Proposed whitelist for", tokenCount, "tokens");
+        console.log("After the timelock, run runExecute() to apply whitelist and fee and propose price feeds.");
         console.log("");
 
         vm.stopBroadcast();
@@ -99,23 +93,18 @@ contract DeployBucketInfo is Script {
         console.log("Owner:", bucketInfo.owner());
         console.log("Platform fee ETA:", bucketInfo.platformFeeEta());
         console.log("");
-        console.log("Deployment (proposal phase) complete! Run runExecute() with the same NETWORK");
-        console.log("after the timelock elapses to apply the proposed fee/whitelist/price-feed changes.");
+        console.log("After the timelock, run runExecute() with this BucketInfo address.");
     }
 
     /**
-     * @notice Second phase of deployment: applies the fee/whitelist/price-feed proposals made
-     * by {run}, once PLATFORM_SETTER_TIMELOCK_DELAY has elapsed. Reads the SAME config file and
-     * the already-deployed BucketInfo address (BUCKET_INFO_ADDRESS env var) so the token set
-     * proposed and the token set executed can never drift apart.
+     * @notice Second phase: apply fee and whitelist proposals, then propose feeds.
      */
     function runExecute() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address bucketInfoAddr = vm.envAddress("BUCKET_INFO_ADDRESS");
-        string memory network = vm.envOr("NETWORK", string("sepolia"));
-
-        string memory configPath = string.concat("./configs/", network, ".json");
+        string memory configPath = vm.envOr("DEPLOYMENT_CONFIG", string("./configs/sepolia.json"));
         string memory json = vm.readFile(configPath);
+        address bucketInfoAddr = vm.parseJsonAddress(json, ".deployment.bucketInfoAddress");
+        require(bucketInfoAddr != address(0), "Set deployment.bucketInfoAddress in configs/sepolia.json");
 
         uint256 tokenCount = 0;
         for (uint256 i = 0; i < 100; i++) {
@@ -125,20 +114,93 @@ contract DeployBucketInfo is Script {
                 break;
             }
         }
-        address[] memory tokenAddresses = new address[](tokenCount);
-        for (uint256 i = 0; i < tokenCount; i++) {
-            string memory basePath = string.concat(".tokens[", vm.toString(i), "]");
-            tokenAddresses[i] = vm.parseJsonAddress(json, string.concat(basePath, ".tokenAddress"));
-        }
+        address[] memory tokenAddresses = _readTokenAddresses(json, tokenCount);
+        address[] memory priceFeeds = _readPriceFeeds(json, tokenCount);
 
         BucketInfo bucketInfo = BucketInfo(payable(bucketInfoAddr));
 
         vm.startBroadcast(deployerPrivateKey);
         bucketInfo.executePlatformFee();
-        bucketInfo.batchExecuteWhitelistAdditions(tokenAddresses);
-        bucketInfo.executeBatchPriceFeeds(tokenAddresses);
+        for (uint256 i = 0; i < tokenCount; i++) {
+            if (bucketInfo.pendingWhitelistAddition(tokenAddresses[i])) {
+                bucketInfo.executeWhitelistAddition(tokenAddresses[i]);
+            }
+        }
+        address[] memory newFeedTokens = new address[](tokenCount);
+        address[] memory newFeeds = new address[](tokenCount);
+        uint256 feedCount;
+        for (uint256 i = 0; i < tokenCount; i++) {
+            if (bucketInfo.getPriceFeed(tokenAddresses[i]) == address(0)) {
+                newFeedTokens[feedCount] = tokenAddresses[i];
+                newFeeds[feedCount] = priceFeeds[i];
+                feedCount++;
+            }
+        }
+        if (feedCount > 0) {
+            assembly ("memory-safe") {
+                mstore(newFeedTokens, feedCount)
+                mstore(newFeeds, feedCount)
+            }
+            bucketInfo.proposeBatchPriceFeeds(newFeedTokens, newFeeds);
+        }
         vm.stopBroadcast();
 
-        console.log("Executed pending platform fee/whitelist/price-feed proposals for", bucketInfoAddr);
+        console.log("Applied fee and whitelist proposals. New price-feed proposals are now pending.");
+        console.log("After another timelock, run runExecutePriceFeeds().");
+    }
+
+    function runExecutePriceFeeds() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        string memory json = vm.readFile(vm.envOr("DEPLOYMENT_CONFIG", string("./configs/sepolia.json")));
+        address bucketInfoAddr = vm.parseJsonAddress(json, ".deployment.bucketInfoAddress");
+        require(bucketInfoAddr != address(0), "Set deployment.bucketInfoAddress in configs/sepolia.json");
+        uint256 tokenCount = _tokenCount(json);
+        address[] memory tokenAddresses = new address[](tokenCount);
+        for (uint256 i = 0; i < tokenCount; i++) {
+            tokenAddresses[i] = vm.parseJsonAddress(json, string.concat(".tokens[", vm.toString(i), "].tokenAddress"));
+        }
+
+        BucketInfo bucketInfo = BucketInfo(payable(bucketInfoAddr));
+        vm.startBroadcast(deployerPrivateKey);
+        for (uint256 i = 0; i < tokenCount; i++) {
+            if (bucketInfo.priceFeedEta(tokenAddresses[i]) != 0) {
+                bucketInfo.executePriceFeed(tokenAddresses[i]);
+            }
+        }
+        vm.stopBroadcast();
+
+        console.log("Executed price-feed proposals for", bucketInfoAddr);
+    }
+
+    function _readTokenAddresses(string memory json, uint256 tokenCount)
+        private
+        pure
+        returns (address[] memory tokenAddresses)
+    {
+        tokenAddresses = new address[](tokenCount);
+        for (uint256 i = 0; i < tokenCount; i++) {
+            tokenAddresses[i] = vm.parseJsonAddress(json, string.concat(".tokens[", vm.toString(i), "].tokenAddress"));
+        }
+    }
+
+    function _readPriceFeeds(string memory json, uint256 tokenCount)
+        private
+        pure
+        returns (address[] memory priceFeeds)
+    {
+        priceFeeds = new address[](tokenCount);
+        for (uint256 i = 0; i < tokenCount; i++) {
+            priceFeeds[i] = vm.parseJsonAddress(json, string.concat(".tokens[", vm.toString(i), "].priceFeed"));
+        }
+    }
+
+    function _tokenCount(string memory json) private pure returns (uint256 count) {
+        for (uint256 i = 0; i < 100; i++) {
+            try vm.parseJsonAddress(json, string.concat(".tokens[", vm.toString(i), "].tokenAddress")) {
+                count++;
+            } catch {
+                break;
+            }
+        }
     }
 }

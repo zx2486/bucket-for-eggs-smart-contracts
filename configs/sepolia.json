@@ -1,5 +1,41 @@
 {
-    "platformFee": 100,
+    "platformFee": 200,
+    "deployment": {
+        "bucketInfoAddress": "0x0000000000000000000000000000000000000000",
+        "implementationRegistryAddress": "0x0000000000000000000000000000000000000000",
+        "implementationRegistryOwner": "0x0000000000000000000000000000000000000000",
+        "oneInchRouter": "0x111111125421cA6dc452d289314280a0f8842A65",
+        "passiveBucket": {
+            "name": "PassiveBucket Share",
+            "symbol": "pBKT",
+            "distributions": [
+                { "symbol": "WBTC", "weight": 75 },
+                { "symbol": "ETH", "weight": 25 }
+            ],
+            "weth": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+            "dexRouter": "0x3bfa4769fb09eefc5a80d6e87c3b9c650f7ae48e",
+            "dexQuoter": "0xed1f6473345f45b75f8179591dd5ba1888cf2fb3",
+            "dexFee": 3000
+        },
+        "activeBucket": {
+            "name": "Active Bucket Share",
+            "symbol": "aBKT",
+            "performanceFeeBps": 1300
+        },
+        "pureMembership": {
+            "uri": "https://api.example.com/metadata/{id}.json",
+            "tiers": [
+                { "tokenId": 1, "level": 1, "name": "Basic", "priceUsd8": 1000000000, "durationSeconds": 2592000 },
+                { "tokenId": 2, "level": 2, "name": "Premium", "priceUsd8": 5000000000, "durationSeconds": 2592000 },
+                { "tokenId": 3, "level": 3, "name": "VIP", "priceUsd8": 30000000000, "durationSeconds": 31536000 }
+            ]
+        },
+        "potentialRugpull": {
+            "cashRatio": 10,
+            "name": "PotentialRugpull Share",
+            "symbol": "pRUG"
+        }
+    },
     "tokens": [
         {
             "symbol": "ETH",

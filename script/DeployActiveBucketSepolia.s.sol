@@ -1,93 +1,58 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.33;
 
-import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {ActiveBucket} from "../src/ActiveBucket.sol";
 import {ActiveBucketFactory} from "../src/ActiveBucketFactory.sol";
 import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
+import {SepoliaDeploymentConfig} from "./SepoliaDeploymentConfig.sol";
 
-/**
- * @title DeployActiveBucketSepolia
- * @notice Deployment script for ActiveBucket on Sepolia testnet via ActiveBucketFactory.
- * @dev Deploys a shared ActiveBucket implementation, deploys ActiveBucketFactory,
- * then calls createActiveBucket() so the deployer owns the resulting proxy.
- */
-contract DeployActiveBucketSepolia is Script {
-    // Sepolia addresses (update with actual deployed BucketInfo address)
-    address constant BUCKET_INFO = address(0); // TODO: Set deployed BucketInfo address
-    // W3.3: the platform-owned ImplementationRegistry ActiveBucket's upgrade path checks against.
-    // Immutable, constructor-set on the implementation itself -- see ActiveBucket.sol's REGISTRY
-    // doc comment. TODO: Set deployed ImplementationRegistry address.
-    address constant IMPLEMENTATION_REGISTRY = address(0);
-    address constant ONEINCH_ROUTER_V6 = 0x111111125421cA6dc452d289314280a0f8842A65;
-
-    // ERC-20 share token metadata
-    string constant TOKEN_NAME = "Active Bucket Share";
-    string constant TOKEN_SYMBOL = "aBKT";
-
+contract DeployActiveBucketSepolia is SepoliaDeploymentConfig {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
+        string memory json = _loadSepoliaConfig();
 
-        address bucketInfoAddr = vm.envOr("BUCKET_INFO_ADDRESS", BUCKET_INFO);
-        require(bucketInfoAddr != address(0), "Set BUCKET_INFO_ADDRESS env variable");
+        address bucketInfoAddr = _configuredAddress(json, ".deployment.bucketInfoAddress");
+        address registryAddr = _configuredAddress(json, ".deployment.implementationRegistryAddress");
+        address router = vm.parseJsonAddress(json, ".deployment.oneInchRouter");
+        string memory name = vm.parseJsonString(json, ".deployment.activeBucket.name");
+        string memory symbol = vm.parseJsonString(json, ".deployment.activeBucket.symbol");
+        uint256 performanceFeeBps = vm.parseJsonUint(json, ".deployment.activeBucket.performanceFeeBps");
 
-        address registryAddr = vm.envOr("REGISTRY_ADDRESS", IMPLEMENTATION_REGISTRY);
-        require(registryAddr != address(0), "Set REGISTRY_ADDRESS env variable");
-
-        console.log("=== ActiveBucket Sepolia Deployment (via Factory) ===");
-        console.log("Deployer:", deployer);
-        console.log("BucketInfo:", bucketInfoAddr);
-        console.log("ImplementationRegistry:", registryAddr);
-        console.log("1inch Router:", ONEINCH_ROUTER_V6);
-        console.log("");
+        require(bucketInfoAddr != address(0), "Set deployment.bucketInfoAddress in configs/sepolia.json");
+        require(bucketInfoAddr.code.length > 0, "BucketInfo has no code");
+        require(registryAddr != address(0), "Set deployment.implementationRegistryAddress in configs/sepolia.json");
+        require(registryAddr.code.length > 0, "ImplementationRegistry has no code");
+        require(router != address(0), "Set deployment.oneInchRouter in configs/sepolia.json");
+        require(router.code.length > 0, "1inch router has no code");
+        require(performanceFeeBps <= 10_000, "Performance fee exceeds 100 percent");
+        _requireRegistryOwner(registryAddr, deployer);
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy shared implementation (never initialised directly)
-        console.log("Step 1: Deploying ActiveBucket implementation...");
         ActiveBucket implementation = new ActiveBucket(registryAddr);
-        console.log("Implementation deployed at:", address(implementation));
-
-        // Step 2: Deploy the factory
-        // W1.7: bucketInfoAddr is now a constructor-time, factory-immutable parameter, not a
-        // per-call argument to createActiveBucket -- see src/ActiveBucketFactory.sol `bucketInfo`.
-        console.log("Step 2: Deploying ActiveBucketFactory...");
         ActiveBucketFactory factory = new ActiveBucketFactory(address(implementation), bucketInfoAddr);
-        console.log("Factory deployed at:", address(factory));
 
-        // Step 2b: Authorize this factory in the ImplementationRegistry (task #33, W1.7
-        // direct-proxy-bypass fix). Without this, every vault's `initialize()` now rejects the
-        // factory's own `new ERC1967Proxy(...)` call with `UnauthorizedInitializer()` -- delegatecall
-        // preserves msg.sender from whoever directly deployed the proxy, which here is the factory
-        // itself, not this script's deployer. This call requires `deployer` to be the registry's
-        // owner; if the platform's ImplementationRegistry is owned by a different key, this step
-        // (and therefore Step 3 below) must instead be run by that owner before this script
-        // proceeds -- it is not something this script can route around.
-        console.log("Step 2b: Authorizing factory in ImplementationRegistry...");
-        IImplementationRegistry(registryAddr).setAuthorizedFactory(address(factory), true);
+        IImplementationRegistry registry = IImplementationRegistry(registryAddr);
+        registry.setAuthorizedFactory(address(factory), true);
+        registry.approve(IImplementationRegistry.Kind.ActiveBucket, address(implementation));
 
-        // Step 3: Create an ActiveBucket proxy via the factory
-        console.log("Step 3: Creating ActiveBucket proxy via factory...");
-        address proxyAddr = factory.createActiveBucket(ONEINCH_ROUTER_V6, TOKEN_NAME, TOKEN_SYMBOL);
-        ActiveBucket activeBucket = ActiveBucket(payable(proxyAddr));
-        console.log("Proxy deployed at:", proxyAddr);
+        address proxy = factory.createActiveBucket(router, name, symbol);
+        ActiveBucket bucket = ActiveBucket(payable(proxy));
+        if (performanceFeeBps != bucket.performanceFeeBps()) {
+            bucket.setPerformanceFee(performanceFeeBps);
+        }
 
         vm.stopBroadcast();
 
-        // Summary
-        console.log("");
-        console.log("=== Deployment Summary ===");
-        console.log("Implementation:         ", address(implementation));
-        console.log("Factory:                ", address(factory));
-        console.log("Proxy (ActiveBucket):   ", address(activeBucket));
-        console.log("Owner:                  ", activeBucket.owner());
-        console.log("BucketInfo:             ", address(activeBucket.bucketInfo()));
-        console.log("1inch Router:           ", activeBucket.oneInchRouter());
-        console.log("Performance Fee (bps):  ", activeBucket.performanceFeeBps());
-        console.log("Factory proxy count:    ", factory.getDeployedProxiesCount());
-        console.log("");
-        console.log("Deployment complete!");
+        console.log("ActiveBucket implementation:", address(implementation));
+        console.log("ActiveBucket factory:", address(factory));
+        console.log("ActiveBucket proxy:", proxy);
+        console.log("Owner:", bucket.owner());
+        console.log("BucketInfo:", address(bucket.bucketInfo()));
+        console.log("ImplementationRegistry:", registryAddr);
+        console.log("1inch router:", bucket.oneInchRouter());
+        console.log("Performance fee bps:", bucket.performanceFeeBps());
     }
 }
