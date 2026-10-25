@@ -39,6 +39,7 @@ forge script script/DeployMockTokens.s.sol \
     --rpc-url $SEPOLIA_RPC_URL \
     --private-key $PRIVATE_KEY \
     --broadcast \
+    --gas-estimate-multiplier "${SEPOLIA_MOCKTOKENS_GAS_MULTIPLIER:-800}" \
     --verify \
     --etherscan-api-key $SEPOLIA_ETHERSCAN_API_KEY \
     -vvv

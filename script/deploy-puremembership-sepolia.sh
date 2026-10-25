@@ -48,6 +48,7 @@ forge script script/DeployPureMembershipSepolia.s.sol \
     --rpc-url "$SEPOLIA_RPC_URL" \
     --private-key "$PRIVATE_KEY" \
     --broadcast \
+    --gas-estimate-multiplier "${SEPOLIA_PUREMEMBERSHIP_GAS_MULTIPLIER:-800}" \
     --verify \
     ${ETHERSCAN_API_KEY:+--etherscan-api-key "$ETHERSCAN_API_KEY"} \
     -vvv

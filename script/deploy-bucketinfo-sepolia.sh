@@ -13,7 +13,7 @@ set +a
 : "${PRIVATE_KEY:?PRIVATE_KEY is required}"
 : "${SEPOLIA_RPC_URL:?SEPOLIA_RPC_URL is required}"
 
-args=(script script/DeployBucketInfo.s.sol --rpc-url "$SEPOLIA_RPC_URL" --private-key "$PRIVATE_KEY" --broadcast -vvv)
+args=(script script/DeployBucketInfo.s.sol --rpc-url "$SEPOLIA_RPC_URL" --private-key "$PRIVATE_KEY" --broadcast --gas-estimate-multiplier "${SEPOLIA_BUCKETINFO_GAS_MULTIPLIER:-800}" -vvv)
 if [[ -n "${ETHERSCAN_API_KEY:-}" ]]; then
   args+=(--verify --etherscan-api-key "$ETHERSCAN_API_KEY")
 fi

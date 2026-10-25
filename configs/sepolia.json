@@ -1,16 +1,18 @@
 {
     "platformFee": 200,
     "deployment": {
-        "bucketInfoAddress": "0x0000000000000000000000000000000000000000",
-        "implementationRegistryAddress": "0x0000000000000000000000000000000000000000",
-        "implementationRegistryOwner": "0x0000000000000000000000000000000000000000",
+        "bucketInfoAddress": "0x8042a98b72d894b6ccccbd9cbad0e459f6d1c42c",
+        "bucketInfoGasLimit": "23027633",
+        "implementationRegistryAddress": "0x8FE7439039d329A8cD5ED284E269949f0c654A12",
+        "implementationRegistryGasLimit": "3538174",
+        "implementationRegistryOwner": "0x40eEb0B789395d1101a88a729794bDE17deE53c1",
         "oneInchRouter": "0x111111125421cA6dc452d289314280a0f8842A65",
         "passiveBucket": {
             "name": "PassiveBucket Share",
             "symbol": "pBKT",
             "distributions": [
-                { "symbol": "WBTC", "weight": 75 },
-                { "symbol": "ETH", "weight": 25 }
+                { "symbol": "LINK", "weight": 5 },
+                { "symbol": "ETH", "weight": 95 }
             ],
             "weth": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
             "dexRouter": "0x3bfa4769fb09eefc5a80d6e87c3b9c650f7ae48e",
@@ -23,7 +25,7 @@
             "performanceFeeBps": 1300
         },
         "pureMembership": {
-            "uri": "https://api.example.com/metadata/{id}.json",
+            "uri": "https://bucketforegg.s3.ap-southeast-1.amazonaws.com/membership/{id}.json",
             "tiers": [
                 { "tokenId": 1, "level": 1, "name": "Basic", "priceUsd8": 1000000000, "durationSeconds": 2592000 },
                 { "tokenId": 2, "level": 2, "name": "Premium", "priceUsd8": 5000000000, "durationSeconds": 2592000 },

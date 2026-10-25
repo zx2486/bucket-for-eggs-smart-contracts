@@ -76,12 +76,21 @@ contract DeployBucketInfo is Script {
         console.log("");
 
         console.log("Proposing token whitelist additions...");
+        address[] memory tokensToPropose = new address[](tokenCount);
+        uint256 proposalCount;
         for (uint256 i = 0; i < tokenCount; i++) {
             if (!bucketInfo.isTokenWhitelisted(tokenAddresses[i])) {
-                bucketInfo.proposeWhitelistAddition(tokenAddresses[i]);
+                tokensToPropose[proposalCount] = tokenAddresses[i];
+                proposalCount++;
             }
         }
-        console.log("Proposed whitelist for", tokenCount, "tokens");
+        if (proposalCount > 0) {
+            assembly ("memory-safe") {
+                mstore(tokensToPropose, proposalCount)
+            }
+            bucketInfo.batchProposeWhitelistAdditions(tokensToPropose);
+        }
+        console.log("Proposed whitelist for", proposalCount, "tokens");
         console.log("After the timelock, run runExecute() to apply whitelist and fee and propose price feeds.");
         console.log("");
 
@@ -121,10 +130,19 @@ contract DeployBucketInfo is Script {
 
         vm.startBroadcast(deployerPrivateKey);
         bucketInfo.executePlatformFee();
+        address[] memory tokensToExecute = new address[](tokenCount);
+        uint256 executionCount;
         for (uint256 i = 0; i < tokenCount; i++) {
             if (bucketInfo.pendingWhitelistAddition(tokenAddresses[i])) {
-                bucketInfo.executeWhitelistAddition(tokenAddresses[i]);
+                tokensToExecute[executionCount] = tokenAddresses[i];
+                executionCount++;
             }
+        }
+        if (executionCount > 0) {
+            assembly ("memory-safe") {
+                mstore(tokensToExecute, executionCount)
+            }
+            bucketInfo.batchExecuteWhitelistAdditions(tokensToExecute);
         }
         address[] memory newFeedTokens = new address[](tokenCount);
         address[] memory newFeeds = new address[](tokenCount);
@@ -161,16 +179,101 @@ contract DeployBucketInfo is Script {
         }
 
         BucketInfo bucketInfo = BucketInfo(payable(bucketInfoAddr));
-        vm.startBroadcast(deployerPrivateKey);
+        address[] memory feedsToExecute = new address[](tokenCount);
+        uint256 executionCount;
         for (uint256 i = 0; i < tokenCount; i++) {
-            if (bucketInfo.priceFeedEta(tokenAddresses[i]) != 0) {
-                bucketInfo.executePriceFeed(tokenAddresses[i]);
+            uint256 eta = bucketInfo.priceFeedEta(tokenAddresses[i]);
+            if (eta != 0 && eta <= block.timestamp) {
+                feedsToExecute[executionCount] = tokenAddresses[i];
+                executionCount++;
+            }
+        }
+
+        vm.startBroadcast(deployerPrivateKey);
+        if (executionCount > 0) {
+            assembly ("memory-safe") {
+                mstore(feedsToExecute, executionCount)
+            }
+            bucketInfo.executeBatchPriceFeeds(feedsToExecute);
+        }
+        vm.stopBroadcast();
+
+        console.log("Executed", executionCount, "price-feed proposals for", bucketInfoAddr);
+    }
+
+    /// @notice Set the Chainlink price staleness window to two days for every whitelisted token.
+    /// @dev BucketInfo exposes only a per-token setter, so this broadcasts one transaction per
+    /// token whose current override differs from the requested value.
+    function runExtendPriceStale() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        string memory configPath = vm.envOr("DEPLOYMENT_CONFIG", string("./configs/sepolia.json"));
+        string memory json = vm.readFile(configPath);
+        address bucketInfoAddr = vm.parseJsonAddress(json, ".deployment.bucketInfoAddress");
+        require(bucketInfoAddr != address(0), "Set deployment.bucketInfoAddress in config");
+
+        BucketInfo bucketInfo = BucketInfo(payable(bucketInfoAddr));
+        address[] memory tokens = bucketInfo.getWhitelistedTokens();
+        uint256 newOverrides;
+
+        vm.startBroadcast(deployerPrivateKey);
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (bucketInfo.maxPriceStaleness(tokens[i]) != 2 days) {
+                bucketInfo.setMaxPriceStaleness(tokens[i], 2 days);
+                newOverrides++;
             }
         }
         vm.stopBroadcast();
 
-        console.log("Executed price-feed proposals for", bucketInfoAddr);
+        console.log("Whitelisted tokens:", tokens.length);
+        console.log("Staleness overrides set to two days:", newOverrides);
     }
+
+    /// @notice Read-only verification of the configured whitelist and price-feed state.
+    /// @dev Call after run(), runExecute(), and runExecutePriceFeeds() have completed and
+    /// their timelocks have elapsed. Does not broadcast or modify chain state.
+    function runVerify() external view {
+        string memory configPath = vm.envOr("DEPLOYMENT_CONFIG", string("./configs/sepolia.json"));
+        string memory json = vm.readFile(configPath);
+        address bucketInfoAddr = vm.parseJsonAddress(json, ".deployment.bucketInfoAddress");
+        require(bucketInfoAddr != address(0), "Set deployment.bucketInfoAddress in config");
+
+        uint256 tokenCount = _tokenCount(json);
+        require(tokenCount > 0, "No tokens configured");
+        BucketInfo bucketInfo = BucketInfo(payable(bucketInfoAddr));
+
+        console.log("=== BucketInfo Configuration Verification ===");
+        console.log("BucketInfo:", bucketInfoAddr);
+        console.log("Configured tokens:", tokenCount);
+
+        for (uint256 i = 0; i < tokenCount; i++) {
+            string memory basePath = string.concat(".tokens[", vm.toString(i), "]");
+            string memory symbol = vm.parseJsonString(json, string.concat(basePath, ".symbol"));
+            address token = vm.parseJsonAddress(json, string.concat(basePath, ".tokenAddress"));
+            address expectedFeed = vm.parseJsonAddress(json, string.concat(basePath, ".priceFeed"));
+
+            require(bucketInfo.isTokenWhitelisted(token), string.concat("Token not whitelisted: ", symbol));
+            require(
+                !bucketInfo.pendingWhitelistAddition(token),
+                string.concat("Whitelist addition still pending: ", symbol)
+            );
+
+            address actualFeed = bucketInfo.getPriceFeed(token);
+            require(actualFeed == expectedFeed, string.concat("Incorrect price feed: ", symbol));
+            require(bucketInfo.priceFeedEta(token) == 0, string.concat("Price feed update still pending: ", symbol));
+
+            (bool priceAvailable, uint256 price) = bucketInfo.tryGetTokenPrice(token);
+            require(priceAvailable && price > 0, string.concat("No valid price available: ", symbol));
+
+            console.log("Verified token:", symbol);
+            console.log("  Address:", token);
+            console.log("  Price feed:", actualFeed);
+            console.log("  Price (USD, 8 decimals):", price);
+        }
+
+        console.log("All configured tokens are whitelisted, correctly priced, and have valid prices.");
+    }
+
+    
 
     function _readTokenAddresses(string memory json, uint256 tokenCount)
         private

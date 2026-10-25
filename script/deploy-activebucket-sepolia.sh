@@ -51,6 +51,7 @@ forge script script/DeployActiveBucketSepolia.s.sol \
     --rpc-url "$SEPOLIA_RPC_URL" \
     --private-key "$PRIVATE_KEY" \
     --broadcast \
+    --gas-estimate-multiplier "${SEPOLIA_ACTIVEBUCKET_GAS_MULTIPLIER:-800}" \
     -vvv
 
 if [ -n "${ETHERSCAN_API_KEY:-}" ]; then

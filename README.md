@@ -51,23 +51,44 @@ All `deploy-*` shell scripts and Foundry deployment scripts broadcast transactio
 3. Wait 48 hours, then apply the fee/whitelist proposals and propose Chainlink feed changes:
 
    ```sh
-   forge script script/DeployBucketInfo.s.sol --sig 'runExecute()' --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+   set -a
+   source .env
+   set +a
+   forge script script/DeployBucketInfo.s.sol --sig 'runExecute()' --rpc-url "$SEPOLIA_RPC_URL" --broadcast --gas-estimate-multiplier 400 -vvv
    ```
 
 4. Wait a further 48 hours, then apply feed proposals:
 
    ```sh
-   forge script script/DeployBucketInfo.s.sol --sig 'runExecutePriceFeeds()' --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+   forge script script/DeployBucketInfo.s.sol --sig 'runExecutePriceFeeds()' --rpc-url "$SEPOLIA_RPC_URL" --broadcast --gas-estimate-multiplier 400 -vvv
    ```
 
    Check BucketInfo's final fee, whitelist, feeds, and live nonzero token prices.
+   ```sh
+   forge script script/DeployBucketInfo.s.sol --sig 'runVerify()' --rpc-url "$SEPOLIA_RPC_URL" --broadcast -vvv
+   ```
 5. Deploy ImplementationRegistry:
 
    ```sh
-   forge script script/DeployImplementationRegistrySepolia.s.sol:DeployImplementationRegistrySepolia --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+   script/deploy-implementationregistry-sepolia.sh
    ```
 
    The initial owner comes from `deployment.implementationRegistryOwner` (zero means the deployer).
+
+   This script passes an explicit `--gas-estimate-multiplier` (800%, i.e. 8x) instead of
+   forge's default 130%. forge's gas estimate for contract creation is computed by its own
+   local EVM simulator, which assumes the legacy code-deposit cost of 200 gas/byte of
+   deployed runtime bytecode. Live Sepolia was confirmed on 2026-10-19 to charge roughly
+   1,650-1,700 gas/byte instead -- about 8x -- while the identical bytecode deployed against
+   mainnet matched forge's estimate within ~1%. This is Sepolia-specific.
+   
+   To get the correct gas estimate, one can call
+   ```sh
+   cast estimate --rpc-url "$SEPOLIA_RPC_URL" --create <contract creation input data> <contract owner address>
+   ```
+
+   recompute the ratio before trusting the hardcoded multiplier again if
+   `ImplementationRegistry.sol` changes.
 6. Copy the registry address to `deployment.implementationRegistryAddress` in `configs/sepolia.json`.
 7. Deploy the configured products:
 
@@ -75,8 +96,24 @@ All `deploy-*` shell scripts and Foundry deployment scripts broadcast transactio
    script/deploy-activebucket-sepolia.sh
    script/deploy-passivebucket-sepolia.sh
    script/deploy-puremembership-sepolia.sh
-   forge script script/DeployPotentialRugpullSepolia.s.sol:DeployPotentialRugpullSepolia --rpc-url "$SEPOLIA_RPC_URL" --broadcast
+   script/deploy-potentialrugpull-sepolia.sh
    ```
+
+   These four scripts also pass an explicit `--gas-estimate-multiplier` (plus the mock-tokens
+   script in dev/test flows) for the same Sepolia-specific reason as step 5, but **their 800%
+   multipliers are unverified placeholders**, not measured values -- ActiveBucket,
+   PassiveBucket, and PureMembership's implementation contracts are large (close to the
+   EIP-170 24,576-byte size cap for PassiveBucket in particular) and have not been measured
+   with the `cast estimate --create` command above. If the ~1,650-1,700 gas/byte shortfall
+   scales with contract size, a contract this large could need a multiplier well above 800%,
+   and in the worst case more gas than a single Sepolia transaction is allowed to request
+   under the post-Fusaka per-tx gas cap (2^24 = 16,777,216 on mainnet; unconfirmed on
+   Sepolia). Measure each implementation contract's real creation cost with
+   `cast estimate --create` before a production deploy, divide by forge's local estimate for
+   that contract to get the real ratio, and override the corresponding
+   `SEPOLIA_*_GAS_MULTIPLIER` environment variable (see each script's header comment) if the
+   measured ratio differs from 800%. If the measured real gas exceeds the per-tx cap, the
+   deploy is not fixable by raising the multiplier further -- escalate.
 8. Save the emitted implementation, factory, proxy/instance addresses in `.env`, then run the corresponding `script/verify-*-sepolia.sh` scripts.
 
 The example config specifies a PassiveBucket allocation of **75% WBTC / 25% ETH**, ActiveBucket's **13% performance fee**, PureMembership tiers of **$10/30 days**, **$50/30 days**, and **$300/365 days**, and a PotentialRugpull **10% cash ratio**. These are configuration values, not validation that the assets or feeds are available or liquid.

@@ -535,8 +535,13 @@ contract BucketInfo is Ownable2Step, Pausable {
 
             // Guarded, explicit cast: answer > 0 was just verified above, so this can
             // never reinterpret a negative two's-complement bit pattern.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 rawPrice = uint256(answer);
 
+            // `decimals` is always assigned by this point: the only path that leaves it
+            // unset is the catch branch above, which returns immediately. The lint's
+            // control-flow analysis doesn't model that try/catch early-return.
+            // forge-lint: disable-next-line(uninitialized-local)
             if (decimals < PRICE_DECIMALS) {
                 return (true, rawPrice * (10 ** (PRICE_DECIMALS - decimals)));
             } else if (decimals > PRICE_DECIMALS) {

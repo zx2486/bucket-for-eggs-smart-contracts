@@ -106,9 +106,12 @@ library SwapExecutionLib {
         if (srcPrice == 0) revert InvalidToken(srcToken);
         if (dstPrice == 0) revert InvalidToken(dstToken);
 
-        uint256 srcValueUsd = (amount * srcPrice) / (10 ** srcDec);
         uint256 minReturnValueUsd = (minReturn * dstPrice) / (10 ** dstDec);
-        uint256 floorValueUsd = (srcValueUsd * (BPS_DENOMINATOR - MIN_RETURN_FLOOR_TOLERANCE_BPS)) / BPS_DENOMINATOR;
+        // Combined into a single division instead of computing srcValueUsd (itself a
+        // truncating division) and then multiplying it again, per CLAUDE.md's
+        // multiply-before-dividing money-math rule.
+        uint256 floorValueUsd = (amount * srcPrice * (BPS_DENOMINATOR - MIN_RETURN_FLOOR_TOLERANCE_BPS))
+            / ((10 ** srcDec) * BPS_DENOMINATOR);
 
         if (minReturnValueUsd < floorValueUsd) {
             revert MinReturnBelowFloor(minReturnValueUsd, floorValueUsd);
@@ -166,13 +169,19 @@ library SwapExecutionLib {
 
         uint256 toleranceBps = maxSlippageBps > BPS_DENOMINATOR ? BPS_DENOMINATOR : maxSlippageBps;
 
-        uint256 srcValueUsd = (amount * srcPrice) / (10 ** srcDec);
-        uint256 minReturnValueUsd = (srcValueUsd * (BPS_DENOMINATOR - toleranceBps)) / BPS_DENOMINATOR;
-        minReturn = (minReturnValueUsd * (10 ** dstDec)) / dstPrice;
+        // Combined into a single division (multiply-then-divide, per CLAUDE.md money-math
+        // rules) instead of chaining amount->srcValueUsd->minReturnValueUsd->minReturn through
+        // three successive truncating divisions, which discarded precision at each step.
+        minReturn = (amount * srcPrice * (BPS_DENOMINATOR - toleranceBps) * (10 ** dstDec))
+            / ((10 ** srcDec) * BPS_DENOMINATOR * dstPrice);
     }
 
     /// @dev Dispatch a typed swap call to the configured router.
     function dispatchSwap(
+        // `router` is always BucketVaultBase._oneInchRouter(), which reads a storage slot
+        // zero-checked at every writer (initializer and setOneInchRouter on both vaults);
+        // the lint's parameter-level check doesn't trace through that accessor.
+        // forge-lint: disable-next-line(missing-zero-check)
         address router,
         bytes4 selector,
         address srcToken,

@@ -168,6 +168,10 @@ contract PassiveBucket is BucketVaultBase {
     function initialize(
         address bucketInfoAddr,
         BucketDistribution[] calldata distributions,
+        // oneInchRouterAddr is checked via _requireNonZero further down in the function body
+        // (after the factory-authorization check); the lint's parameter-level pattern match
+        // doesn't trace that helper call.
+        // forge-lint: disable-next-line(missing-zero-check)
         address oneInchRouterAddr,
         string memory name,
         string memory symbol
@@ -475,6 +479,9 @@ contract PassiveBucket is BucketVaultBase {
      * @notice Set the WETH address for DEX swaps involving native ETH
      * @param _weth The WETH contract address
      */
+    // _weth is checked via _requireNonZero on the line immediately inside the function body;
+    // the lint's parameter-level pattern match doesn't trace that helper call.
+    // forge-lint: disable-next-line(missing-zero-check)
     function setWETH(address _weth) external onlyOwnerNotBlacklisted {
         _requireNonZero(_weth);
         weth = _weth;

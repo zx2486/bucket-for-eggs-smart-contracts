@@ -312,9 +312,18 @@ abstract contract BucketVaultBase is
         return IERC20Metadata(token).decimals();
     }
 
-    /// @dev Transfer a token or native ETH.
+    /// @dev Transfer a token or native ETH. Every current caller (recoverTokens,
+    /// redeemForStable, and ActiveBucket.flashLoan) is nonReentrant, and nonReentrant is a
+    /// single contract-wide lock (ReentrancyGuardTransient), so a reentrant call here cannot
+    /// re-enter any other nonReentrant-guarded function either. `to` is always a
+    /// caller-authenticated address (the owner for recoverTokens, msg.sender for
+    /// redeemForStable, the flash-loan receiver for flashLoan), not an arbitrary unvalidated
+    /// address. forge-lint's reentrancy-eth/reentrancy-balance analysis flags this call site
+    /// directly rather than tracing nonReentrant through all callers, so it fires regardless
+    /// of caller context -- confirmed false positive, suppressed below.
     function _transferToken(address token, address to, uint256 amount) internal {
         if (token == address(0)) {
+            // forge-lint: disable-next-line(arbitrary-send-eth,reentrancy-eth,reentrancy-balance)
             (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
@@ -460,7 +469,11 @@ abstract contract BucketVaultBase is
     }
 
     /// @notice Recover a non-whitelisted token or native ETH.
-    function recoverTokens(address token, uint256 amount, address to) external onlyOwnerNotBlacklisted {
+    // nonReentrant added: this function sends value to a caller-chosen `to` via _transferToken,
+    // which can trigger the recipient's fallback before TokensRecovered is emitted. The lint
+    // flagged the shared _transferToken helper for this reason; every other caller already had
+    // nonReentrant, so this was the one real gap in the cluster.
+    function recoverTokens(address token, uint256 amount, address to) external nonReentrant onlyOwnerNotBlacklisted {
         if (to == address(0)) revert ZeroAddress();
         if (_bucketInfo().isTokenWhitelisted(token)) {
             revert CannotRecoverWhitelistedToken(token);
@@ -557,8 +570,11 @@ abstract contract BucketVaultBase is
     }
 
     /// @dev Selector for the typed 1inch swap function.
+    // casting to 'bytes4' is safe because this is the standard 4-byte function-selector
+    // derivation (truncating a keccak256 hash to its first 4 bytes), not a value reinterpretation.
     bytes4 public constant ONEINCH_SWAP_SELECTOR =
-        bytes4(keccak256("execute1inchSwap(address,address,address,uint256,uint256)"));
+    // forge-lint: disable-next-line(unsafe-typecast)
+    bytes4(keccak256("execute1inchSwap(address,address,address,uint256,uint256)"));
 
     /// @dev Execute a validated 1inch swap.
     function _execute1inchSwap(address srcToken, address dstToken, uint256 amount, uint256 minReturn)

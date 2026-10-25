@@ -1,0 +1,10 @@
+{
+  "name": "Bucket for Eggs — Premium Membership",
+  "description": "A super-sized thank-you to the project owner. Premium membership recognizes your generous support and helps make future improvements to Bucket for Eggs possible.",
+  "attributes": [
+    { "trait_type": "Membership Tier", "value": "Premium" },
+    { "trait_type": "Level", "value": 2 },
+    { "trait_type": "Membership Term", "value": "30 days" },
+    { "trait_type": "Support", "value": "Super thank you" }
+  ]
+}

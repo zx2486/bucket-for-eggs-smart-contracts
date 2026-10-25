@@ -551,10 +551,11 @@ contract PureMembership is
         external
         onlyOwner
         whenCallerNotBlacklisted
+        // forge-lint: disable-next-line(non-reentrant-not-first)
         nonReentrant
         whenPlatformOperational
     {
-        // if (to == address(0)) revert ZeroAddress();
+        if (to == address(0)) revert ZeroAddress();
         if (!bucketInfo.isTokenValid(tokenAddr)) revert InvalidToken(tokenAddr);
         if (amount == 0) revert ZeroAmount();
 
@@ -643,13 +644,22 @@ contract PureMembership is
      * @param amount The amount to recover
      * @param to The recipient address
      */
-    function recoverTokens(address token, uint256 amount, address to) external onlyOwner whenCallerNotBlacklisted {
+    // nonReentrant added: sends value to a caller-chosen `to` before TokensRecovered is
+    // emitted, same gap as BucketVaultBase.recoverTokens -- the one real finding in this
+    // lint cluster, not a false positive.
+    function recoverTokens(address token, uint256 amount, address to)
+        external
+        nonReentrant
+        onlyOwner
+        whenCallerNotBlacklisted
+    {
         if (to == address(0)) revert ZeroAddress();
         if (bucketInfo.isTokenWhitelisted(token)) {
             revert CannotRecoverWhitelistedToken(token);
         }
 
         if (token == address(0)) {
+            // forge-lint: disable-next-line(arbitrary-send-eth)
             (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {
@@ -868,8 +878,11 @@ contract PureMembership is
         return IERC20Metadata(token).decimals();
     }
 
+    /// @dev Transfer a token or native ETH. The only caller is withdrawRevenue, which is
+    /// nonReentrant, and `to` there is an owner-chosen address, not an arbitrary unvalidated one.
     function _transferToken(address token, address to, uint256 amount) internal {
         if (token == address(0)) {
+            // forge-lint: disable-next-line(arbitrary-send-eth,reentrancy-eth)
             (bool success,) = to.call{value: amount}("");
             if (!success) revert ETHTransferFailed();
         } else {

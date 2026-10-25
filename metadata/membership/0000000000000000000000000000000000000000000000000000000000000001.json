@@ -1,0 +1,10 @@
+{
+  "name": "Bucket for Eggs — Basic Membership",
+  "description": "A heartfelt thank-you to the project owner. Basic membership is a simple way to show your appreciation and support the continued development of Bucket for Eggs.",
+  "attributes": [
+    { "trait_type": "Membership Tier", "value": "Basic" },
+    { "trait_type": "Level", "value": 1 },
+    { "trait_type": "Membership Term", "value": "30 days" },
+    { "trait_type": "Support", "value": "Thank you" }
+  ]
+}

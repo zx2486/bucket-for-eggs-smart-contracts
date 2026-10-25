@@ -198,6 +198,9 @@ contract ActiveBucket is BucketVaultBase {
     function swapBy1inch(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
         external
         onlyOwner
+        // onlyOwner is a pure storage read (owner() comparison) with no external call, so
+        // placing nonReentrant after it does not open a reentrancy window before the lock engages.
+        // forge-lint: disable-next-line(non-reentrant-not-first)
         nonReentrant
         whenNotPaused
         whenSwapNotPaused
@@ -237,6 +240,9 @@ contract ActiveBucket is BucketVaultBase {
     function executeMultiSwapBy1inch(SwapLeg[] calldata legs)
         external
         onlyOwner
+        // Same rationale as swapBy1inch: onlyOwner is a pure storage read with no external
+        // call, so it is safe ahead of nonReentrant.
+        // forge-lint: disable-next-line(non-reentrant-not-first)
         nonReentrant
         whenNotPaused
         whenSwapNotPaused

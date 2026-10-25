@@ -1,0 +1,11 @@
+{
+  "name": "Bucket for Eggs — VIP Membership",
+  "description": "A super-super thank-you to the project owner. VIP support includes a commitment from the project owner to develop one additional feature for Bucket for Eggs for each new VIP membership purchased. Feature ideas and delivery timing should be agreed with the project owner; implementation remains subject to feasibility, security, and project constraints.",
+  "attributes": [
+    { "trait_type": "Membership Tier", "value": "VIP" },
+    { "trait_type": "Level", "value": 3 },
+    { "trait_type": "Membership Term", "value": "365 days" },
+    { "trait_type": "Support", "value": "Super-super thank you" },
+    { "trait_type": "Feature Commitment", "value": "One additional feature per new VIP membership" }
+  ]
+}

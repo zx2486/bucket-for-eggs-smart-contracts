@@ -59,9 +59,9 @@ if [[ "$payment_token" == "0x0000000000000000000000000000000000000000" ]]; then
     price_usd8=$(python3 - "$tier_config" <<'PY'
 import re, sys
 matches=re.findall(r"\d+", sys.argv[1])
-    if len(matches) < 4:
+if len(matches) < 4:
     raise SystemExit("Unable to decode tier price from getMembershipInfo result")
-    print(matches[2])
+print(matches[2])
 PY
 )
     eth_price_result=$(cast call "$bucket_info" 'getTokenPrice(address)(uint256)' "$payment_token" "${rpc[@]}")

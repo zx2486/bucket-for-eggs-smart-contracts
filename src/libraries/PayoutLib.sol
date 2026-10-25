@@ -36,6 +36,9 @@ library PayoutLib {
     /// @notice Transfer redemption payouts and update held-token status.
     function payoutAndSync(
         EnumerableSet.AddressSet storage heldTokens,
+        // `to` is never attacker-controlled: every current caller passes msg.sender or a
+        // msg.sender-derived redeemer, which can never be address(0) on-chain.
+        // forge-lint: disable-next-line(missing-zero-check)
         address to,
         address[] memory tokens,
         uint256[] memory returnAmounts
