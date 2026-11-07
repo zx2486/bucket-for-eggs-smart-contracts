@@ -176,44 +176,6 @@ library SwapExecutionLib {
             / ((10 ** srcDec) * BPS_DENOMINATOR * dstPrice);
     }
 
-    /// @dev Dispatch a typed swap call to the configured router.
-    function dispatchSwap(
-        // `router` is always BucketVaultBase._oneInchRouter(), which reads a storage slot
-        // zero-checked at every writer (initializer and setOneInchRouter on both vaults);
-        // the lint's parameter-level check doesn't trace through that accessor.
-        // forge-lint: disable-next-line(missing-zero-check)
-        address router,
-        bytes4 selector,
-        address srcToken,
-        address dstToken,
-        uint256 amount,
-        uint256 minReturn
-    ) public {
-        bytes memory routerCalldata =
-            abi.encodeWithSelector(selector, srcToken, dstToken, address(this), amount, minReturn);
-
-        if (routerCalldata.length < 4 + 32 * 3) revert MalformedSwapPayload();
-        address receiver;
-        assembly {
-            receiver := mload(add(routerCalldata, 100))
-        }
-        if (receiver != address(this)) revert MalformedSwapPayload();
-
-        bool isNativeSrc = (srcToken == address(0));
-
-        (bool success, bytes memory returndata) =
-            isNativeSrc ? router.call{value: amount}(routerCalldata) : router.call(routerCalldata);
-
-        if (!success) {
-            if (returndata.length > 0) {
-                assembly {
-                    revert(add(returndata, 32), mload(returndata))
-                }
-            }
-            revert SwapFailed();
-        }
-    }
-
     /// @dev Add a loss to the current epoch budget.
     function consumeEpochValueLossBudget(
         EpochLossBudget storage budget,

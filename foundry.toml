@@ -35,7 +35,8 @@ fs_permissions = [
     # Read-only, and scoped to `./out` only -- no write/broadcast capability
     # granted, and no `ffi` needed (`ffi` is not enabled anywhere in this
     # file and this change does not turn it on).
-    { access = "read", path = "./out" }
+    { access = "read", path = "./out" },
+    { access = "read", path = "./test/fixtures/d5/old-artifacts" }
 ]
 
 # Gas reporting

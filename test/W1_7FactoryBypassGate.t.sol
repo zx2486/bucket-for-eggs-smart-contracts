@@ -23,14 +23,14 @@ contract W1_7GateActiveBucketTest is Test {
 
     function setUp() public {
         registry = new ImplementationRegistry(address(this));
-        implementation = new ActiveBucket(address(registry));
+        implementation = new ActiveBucket(address(registry), address(this));
         bucketInfoStandIn = makeAddr("activeBucketInfoStandIn");
         oneInchRouterStandIn = makeAddr("activeOneInchRouterStandIn");
     }
 
     function test_RevertDirectProxyBypass_UnauthorizedCaller() public {
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, bucketInfoStandIn, oneInchRouterStandIn, "Evil Bucket", "EVIL"
+            ActiveBucket.initialize.selector, bucketInfoStandIn, "Evil Bucket", "EVIL"
         );
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
         new ERC1967Proxy(address(implementation), initData);
@@ -39,19 +39,19 @@ contract W1_7GateActiveBucketTest is Test {
     function test_RevertDirectProxyBypass_UnauthorizedFactoryLookalike() public {
         ActiveBucketFactory rogueFactory = new ActiveBucketFactory(address(implementation), bucketInfoStandIn);
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
-        rogueFactory.createActiveBucket(oneInchRouterStandIn, "Evil Bucket", "EVIL");
+        rogueFactory.createActiveBucket("Evil Bucket", "EVIL");
     }
 
     function test_FactoryPathStillWorks() public {
         ActiveBucketFactory factory = new ActiveBucketFactory(address(implementation), bucketInfoStandIn);
         registry.setAuthorizedFactory(address(factory), true);
 
-        address proxyAddr = factory.createActiveBucket(oneInchRouterStandIn, "Active Bucket Share", "aBKT");
+        address proxyAddr = factory.createActiveBucket("Active Bucket Share", "aBKT");
         ActiveBucket bucket = ActiveBucket(payable(proxyAddr));
 
         assertEq(bucket.owner(), address(this));
         assertEq(address(bucket.bucketInfo()), bucketInfoStandIn);
-        assertEq(bucket.oneInchRouter(), oneInchRouterStandIn);
+        assertEq(bucket.oneInchRouter(), address(this));
     }
 }
 
@@ -69,7 +69,7 @@ contract W1_7GatePassiveBucketTest is Test {
 
     function setUp() public {
         registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry));
+        implementation = new PassiveBucket(address(registry), address(this));
         bucketInfoStandIn = makeAddr("passiveBucketInfoStandIn");
         oneInchRouterStandIn = makeAddr("passiveOneInchRouterStandIn");
 
@@ -87,7 +87,7 @@ contract W1_7GatePassiveBucketTest is Test {
     function test_RevertDirectProxyBypass_UnauthorizedCaller() public {
         PassiveBucket.BucketDistribution[] memory dists = _singleTokenDistributions();
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector, bucketInfoStandIn, dists, oneInchRouterStandIn, "Evil Bucket", "EVIL"
+            PassiveBucket.initialize.selector, bucketInfoStandIn, dists, "Evil Bucket", "EVIL"
         );
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
         new ERC1967Proxy(address(implementation), initData);
@@ -97,7 +97,7 @@ contract W1_7GatePassiveBucketTest is Test {
         PassiveBucket.BucketDistribution[] memory dists = _singleTokenDistributions();
         PassiveBucketFactory rogueFactory = new PassiveBucketFactory(address(implementation), bucketInfoStandIn);
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
-        rogueFactory.createPassiveBucket(dists, oneInchRouterStandIn, "Evil Bucket", "EVIL");
+        rogueFactory.createPassiveBucket(dists, "Evil Bucket", "EVIL");
     }
 
     function test_FactoryPathStillWorks() public {
@@ -105,12 +105,12 @@ contract W1_7GatePassiveBucketTest is Test {
         PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), address(bucketInfo));
         registry.setAuthorizedFactory(address(factory), true);
 
-        address proxyAddr = factory.createPassiveBucket(dists, address(oneInchRouter), "PassiveBucket Share", "pBKT");
+        address proxyAddr = factory.createPassiveBucket(dists, "PassiveBucket Share", "pBKT");
         PassiveBucket bucket = PassiveBucket(payable(proxyAddr));
 
         assertEq(bucket.owner(), address(this));
         assertEq(address(bucket.bucketInfo()), address(bucketInfo));
-        assertEq(bucket.oneInchRouter(), address(oneInchRouter));
+        assertEq(bucket.oneInchRouter(), address(this));
     }
 }
 

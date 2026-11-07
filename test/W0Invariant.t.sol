@@ -107,7 +107,7 @@ contract W0InvariantPassiveBucketTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry));
+        implementation = new PassiveBucket(address(registry), address(this));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -119,7 +119,6 @@ contract W0InvariantPassiveBucketTest is Test {
             PassiveBucket.initialize.selector,
             address(bucketInfo),
             dists,
-            address(oneInchRouter),
             "PassiveBucket Share",
             "pBKT"
         );

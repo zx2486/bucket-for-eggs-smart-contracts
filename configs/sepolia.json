@@ -38,6 +38,18 @@
             "symbol": "pRUG"
         }
     },
+    "stablecoins": [
+        {
+            "symbol": "USDC",
+            "tokenAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+            "priceFeed": "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"
+        },
+        {
+            "symbol": "DAI",
+            "tokenAddress": "0x3e622317f8C93f7328350cF0B56d9eD4C620C5d6",
+            "priceFeed": "0x14866185B1962B63C3Ea9E03Bc1da838bab34C19"
+        }
+    ],
     "tokens": [
         {
             "symbol": "ETH",

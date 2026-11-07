@@ -170,11 +170,11 @@ contract W4GateActiveBucketTest is Test {
         bucketInfo.addToken(address(token), TOKEN_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new ActiveBucket(address(registry));
+        implementation = new ActiveBucket(address(registry), address(this));
         registry.setAuthorizedFactory(address(this), true);
 
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, address(bucketInfo), address(0xBEEF), "ActiveBucket Share", "aBKT"
+            ActiveBucket.initialize.selector, address(bucketInfo), "ActiveBucket Share", "aBKT"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         bucket = ActiveBucket(payable(address(proxy)));
@@ -236,7 +236,7 @@ contract W4GateActiveBucketTest is Test {
         bucketInfo.setBlacklisted(depositor, true);
 
         vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, depositor));
-        bucket.swapBy1inch(address(token), address(token), 1, 0);
+        bucket.swapBy1inch(address(token), address(token), 1, 0, bytes(""));
     }
 
     function test_G4_FailClosed_RevertingBucketInfo_BlocksDeposit() public {
@@ -338,7 +338,7 @@ contract W4GatePassiveBucketTest is Test {
         bucketInfo.addToken(address(token), TOKEN_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry));
+        implementation = new PassiveBucket(address(registry), address(this));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
@@ -348,7 +348,6 @@ contract W4GatePassiveBucketTest is Test {
             PassiveBucket.initialize.selector,
             address(bucketInfo),
             dists,
-            address(0xBEEF),
             "PassiveBucket Share",
             "pBKT"
         );
@@ -410,7 +409,7 @@ contract W4GatePassiveBucketTest is Test {
 
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, user1));
-        bucket.rebalanceBy1inch(address(token), address(token), 1, 0);
+        bucket.rebalanceBy1inch(address(token), address(token), 1, 0, bytes(""));
     }
 
     function test_G4_FailClosed_RevertingBucketInfo_BlocksRedeem() public {

@@ -147,7 +147,7 @@ contract ActiveBucketFactoryTest is Test {
         deployer = address(this);
         alice = makeAddr("alice");
         bob = makeAddr("bob");
-        mockOneInch = makeAddr("oneInch");
+        mockOneInch = address(this);
 
         bucketInfo = new MockBucketInfoForABFactory();
         tokenA = new MockERC20ForABFactory("Token A", "TKA", 18);
@@ -158,7 +158,7 @@ contract ActiveBucketFactoryTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         registry = new ImplementationRegistry(deployer);
-        implementation = new ActiveBucket(address(registry));
+        implementation = new ActiveBucket(address(registry), mockOneInch);
         factory = new ActiveBucketFactory(address(implementation), address(bucketInfo));
         registry.setAuthorizedFactory(address(factory), true);
     }
@@ -191,57 +191,58 @@ contract ActiveBucketFactoryTest is Test {
     }
 
     function test_Create_DeploysProxy() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertTrue(proxy != address(0));
     }
 
     function test_Create_OwnerIsCallerNotFactory() public {
         vm.prank(alice);
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(ActiveBucket(payable(proxy)).owner(), alice);
     }
 
     function test_Create_OwnerIsNotFactory() public {
         vm.prank(alice);
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertTrue(ActiveBucket(payable(proxy)).owner() != address(factory));
     }
 
     function test_Create_BucketInfoIsSet() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), address(bucketInfo));
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
     }
 
     function test_Create_OneInchRouterIsSet() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(ActiveBucket(payable(proxy)).oneInchRouter(), mockOneInch);
     }
 
     function test_Create_ERC20NameAndSymbol() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         ActiveBucket ab = ActiveBucket(payable(proxy));
         assertEq(ab.name(), NAME);
         assertEq(ab.symbol(), SYMBOL);
     }
 
     function test_Create_DefaultPerformanceFee() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         ActiveBucket ab = ActiveBucket(payable(proxy));
         assertEq(ab.performanceFeeBps(), 1300);
     }
 
     function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public pure {}
 
-    function test_Create_ZeroOneInchReverts() public {
-        vm.expectRevert(ActiveBucketFactory.InvalidOneInchRouter.selector);
-        factory.createActiveBucket(address(0), NAME, SYMBOL);
+    function test_Create_OneInchRouterIsImplementationImmutable() public {
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
+        assertEq(ActiveBucket(payable(proxy)).oneInchRouter(), mockOneInch);
+        assertEq(implementation.ONEINCH_ROUTER(), mockOneInch);
     }
 
     function test_Create_EmitsEvent() public {
         vm.recordLogs();
         vm.prank(alice);
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
 
         assertEq(ActiveBucket(payable(proxy)).owner(), alice);
         assertEq(factory.deployedProxies(0), proxy);
@@ -251,36 +252,36 @@ contract ActiveBucketFactoryTest is Test {
         vm.prank(alice);
         vm.expectEmit(false, true, true, false);
         emit ActiveBucketCreated(address(0), alice, address(bucketInfo), NAME, SYMBOL);
-        factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        factory.createActiveBucket(NAME, SYMBOL);
     }
 
     function test_Create_ProxyIsIndependentOfImplementation() public {
         vm.expectRevert();
-        implementation.initialize(address(bucketInfo), mockOneInch, NAME, SYMBOL);
+        implementation.initialize(address(bucketInfo), NAME, SYMBOL);
 
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertTrue(proxy != address(0));
     }
 
     function test_Create_CustomNameAndSymbol() public {
-        address proxy = factory.createActiveBucket(mockOneInch, "My Active Fund", "MAF");
+        address proxy = factory.createActiveBucket("My Active Fund", "MAF");
         ActiveBucket ab = ActiveBucket(payable(proxy));
         assertEq(ab.name(), "My Active Fund");
         assertEq(ab.symbol(), "MAF");
     }
 
     function test_Tracking_SingleDeployment() public {
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(factory.getDeployedProxiesCount(), 1);
         assertEq(factory.deployedProxies(0), proxy);
     }
 
     function test_Tracking_MultipleDeployments() public {
         vm.prank(alice);
-        address proxy1 = factory.createActiveBucket(mockOneInch, "Bucket A", "BA");
+        address proxy1 = factory.createActiveBucket("Bucket A", "BA");
 
         vm.prank(bob);
-        address proxy2 = factory.createActiveBucket(mockOneInch, "Bucket B", "BB");
+        address proxy2 = factory.createActiveBucket("Bucket B", "BB");
 
         assertEq(factory.getDeployedProxiesCount(), 2);
         assertEq(factory.deployedProxies(0), proxy1);
@@ -288,15 +289,15 @@ contract ActiveBucketFactoryTest is Test {
     }
 
     function test_Tracking_ProxiesAreUnique() public {
-        address proxy1 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createActiveBucket(NAME, SYMBOL);
+        address proxy2 = factory.createActiveBucket(NAME, SYMBOL);
         assertTrue(proxy1 != proxy2);
     }
 
     function test_Tracking_GetAllDeployedProxies() public {
-        address proxy1 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
-        address proxy3 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createActiveBucket(NAME, SYMBOL);
+        address proxy2 = factory.createActiveBucket(NAME, SYMBOL);
+        address proxy3 = factory.createActiveBucket(NAME, SYMBOL);
 
         address[] memory proxies = factory.getAllDeployedProxies();
         assertEq(proxies.length, 3);
@@ -307,10 +308,10 @@ contract ActiveBucketFactoryTest is Test {
 
     function test_Isolation_DifferentOwners() public {
         vm.prank(alice);
-        address proxyAlice = factory.createActiveBucket(mockOneInch, "Alice Bucket", "ALI");
+        address proxyAlice = factory.createActiveBucket("Alice Bucket", "ALI");
 
         vm.prank(bob);
-        address proxyBob = factory.createActiveBucket(mockOneInch, "Bob Bucket", "BOB");
+        address proxyBob = factory.createActiveBucket("Bob Bucket", "BOB");
 
         assertEq(ActiveBucket(payable(proxyAlice)).owner(), alice);
         assertEq(ActiveBucket(payable(proxyBob)).owner(), bob);
@@ -318,10 +319,10 @@ contract ActiveBucketFactoryTest is Test {
 
     function test_Isolation_PauseOneDoesNotAffectOther() public {
         vm.prank(alice);
-        address proxyAlice = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createActiveBucket(NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createActiveBucket(NAME, SYMBOL);
 
         ActiveBucket abAlice = ActiveBucket(payable(proxyAlice));
         ActiveBucket abBob = ActiveBucket(payable(proxyBob));
@@ -342,8 +343,8 @@ contract ActiveBucketFactoryTest is Test {
         ActiveBucketFactory factory2 = new ActiveBucketFactory(address(implementation), address(bucketInfo2));
         registry.setAuthorizedFactory(address(factory2), true);
 
-        address proxy1 = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
-        address proxy2 = factory2.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy1 = factory.createActiveBucket(NAME, SYMBOL);
+        address proxy2 = factory2.createActiveBucket(NAME, SYMBOL);
 
         assertEq(address(ActiveBucket(payable(proxy1)).bucketInfo()), address(bucketInfo));
         assertEq(address(ActiveBucket(payable(proxy2)).bucketInfo()), address(bucketInfo2));
@@ -351,10 +352,10 @@ contract ActiveBucketFactoryTest is Test {
 
     function test_Isolation_AliceCannotPauseBobsContract() public {
         vm.prank(alice);
-        address proxyAlice = factory.createActiveBucket(mockOneInch, "Alice Bucket", "ALI");
+        address proxyAlice = factory.createActiveBucket("Alice Bucket", "ALI");
 
         vm.prank(bob);
-        address proxyBob = factory.createActiveBucket(mockOneInch, "Bob Bucket", "BOB");
+        address proxyBob = factory.createActiveBucket("Bob Bucket", "BOB");
 
         vm.prank(alice);
         vm.expectRevert();
@@ -367,10 +368,10 @@ contract ActiveBucketFactoryTest is Test {
 
     function test_Isolation_DepositOnlyAffectsOwnProxy() public {
         vm.prank(alice);
-        address proxyAlice = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createActiveBucket(NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createActiveBucket(NAME, SYMBOL);
 
         ActiveBucket abAlice = ActiveBucket(payable(proxyAlice));
         ActiveBucket abBob = ActiveBucket(payable(proxyBob));
@@ -383,22 +384,18 @@ contract ActiveBucketFactoryTest is Test {
         assertEq(abBob.totalSupply(), 0);
     }
 
-    function test_Isolation_AliceCannotSetBobsRouter() public {
+    function test_AllVaultsUseImplementationPinnedRouter() public {
         vm.prank(alice);
-        address proxyAlice = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyAlice = factory.createActiveBucket(NAME, SYMBOL);
 
         vm.prank(bob);
-        address proxyBob = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxyBob = factory.createActiveBucket(NAME, SYMBOL);
 
-        address newRouter = makeAddr("newRouter");
+        assertEq(ActiveBucket(payable(proxyAlice)).oneInchRouter(), mockOneInch);
+        assertEq(ActiveBucket(payable(proxyBob)).oneInchRouter(), mockOneInch);
 
-        vm.prank(alice);
-        vm.expectRevert();
-        ActiveBucket(payable(proxyBob)).setOneInchRouter(newRouter);
-
-        vm.prank(alice);
-        ActiveBucket(payable(proxyAlice)).setOneInchRouter(newRouter);
-        assertEq(ActiveBucket(payable(proxyAlice)).oneInchRouter(), newRouter);
+        (bool success,) = proxyBob.call(abi.encodeWithSignature("setOneInchRouter(address)", makeAddr("newRouter")));
+        assertFalse(success, "router mutation selector must not exist");
     }
 
     function testFuzz_Create_ArbitraryCallerBecomesOwner(address caller) public {
@@ -407,7 +404,7 @@ contract ActiveBucketFactoryTest is Test {
         vm.assume(uint160(caller) > 0xFF);
 
         vm.prank(caller);
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(ActiveBucket(payable(proxy)).owner(), caller);
     }
 
@@ -415,7 +412,7 @@ contract ActiveBucketFactoryTest is Test {
         vm.assume(count > 0 && count <= 20);
 
         for (uint256 i = 0; i < count; i++) {
-            factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+            factory.createActiveBucket(NAME, SYMBOL);
         }
 
         assertEq(factory.getDeployedProxiesCount(), count);
@@ -432,14 +429,14 @@ contract ActiveBucketFactoryTest is Test {
 
     function test_W17_VaultBucketInfoGetterEqualsFactoryImmutable() public {
         vm.prank(alice);
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
     }
 
     function test_W17_CreatedEventBucketInfoFieldMatchesFactoryImmutable() public {
         vm.expectEmit(false, true, true, true);
         emit ActiveBucketCreated(address(0), address(this), factory.bucketInfo(), NAME, SYMBOL);
-        factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        factory.createActiveBucket(NAME, SYMBOL);
     }
 
     function test_W17_PreFixVulnerability_AttackerControlledBucketInfoCannotBeInjectedAtCreateTime() public {
@@ -447,7 +444,7 @@ contract ActiveBucketFactoryTest is Test {
         attackerBucketInfo.addToken(address(0), 1);
 
         vm.prank(makeAddr("attacker"));
-        address proxy = factory.createActiveBucket(mockOneInch, NAME, SYMBOL);
+        address proxy = factory.createActiveBucket(NAME, SYMBOL);
 
         assertEq(address(ActiveBucket(payable(proxy)).bucketInfo()), address(bucketInfo));
         assertTrue(address(ActiveBucket(payable(proxy)).bucketInfo()) != address(attackerBucketInfo));

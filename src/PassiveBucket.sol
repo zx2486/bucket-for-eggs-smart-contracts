@@ -43,8 +43,8 @@ contract PassiveBucket is BucketVaultBase {
     /// @notice BucketInfo contract for token validation and pricing
     IBucketInfo public bucketInfo;
 
-    /// @notice 1inch aggregation router address
-    address public oneInchRouter;
+    /// @dev Deprecated storage slot retained for proxy layout compatibility.
+    address private __deprecated_oneInchRouter;
 
     /// @notice WETH address for DEX swaps involving native ETH
     address public weth;
@@ -89,6 +89,9 @@ contract PassiveBucket is BucketVaultBase {
     /// itself must not be swappable by this vault's (customer) owner.
     IImplementationRegistry public immutable REGISTRY;
 
+    /// @notice Fixed 1inch aggregation router address for this implementation.
+    address public immutable ONEINCH_ROUTER;
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -121,6 +124,7 @@ contract PassiveBucket is BucketVaultBase {
     /// @dev Narrowed to zero-arg since `_verifyDistribution`'s tolerance check doesn't carry
     /// per-token detail into the revert.
     error DistributionMismatch();
+    error InvalidOneInchRouter();
     /// @dev Custom error in place of a `require(..., "string")` — same revert conditions, same
     /// call sites, smaller bytecode.
     error FeesExceed100Percent();
@@ -149,9 +153,12 @@ contract PassiveBucket is BucketVaultBase {
     /// @custom:oz-upgrades-unsafe-allow constructor
     /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
     /// implementations against. Set once at construction and never repointable.
-    constructor(address registry_) {
-        if (registry_ == address(0)) revert ZeroAddress();
+    /// @param router_ The platform-fixed 1inch router for this implementation.
+    constructor(address registry_, address router_) {
+        if (registry_ == address(0) || router_ == address(0)) revert ZeroAddress();
+        if (router_.code.length == 0) revert InvalidOneInchRouter();
         REGISTRY = IImplementationRegistry(registry_);
+        ONEINCH_ROUTER = router_;
         _disableInitializers();
     }
 
@@ -163,16 +170,10 @@ contract PassiveBucket is BucketVaultBase {
      * @notice Initializes the PassiveBucket contract
      * @param bucketInfoAddr The BucketInfo contract address
      * @param distributions The initial bucket distributions (token + weight arrays)
-     * @param oneInchRouterAddr The 1inch aggregation router address
      */
     function initialize(
         address bucketInfoAddr,
         BucketDistribution[] calldata distributions,
-        // oneInchRouterAddr is checked via _requireNonZero further down in the function body
-        // (after the factory-authorization check); the lint's parameter-level pattern match
-        // doesn't trace that helper call.
-        // forge-lint: disable-next-line(missing-zero-check)
-        address oneInchRouterAddr,
         string memory name,
         string memory symbol
     ) external initializer {
@@ -181,7 +182,6 @@ contract PassiveBucket is BucketVaultBase {
         // Routed through {FactoryAuthLib} for bytecode-size relief; revert data is unchanged.
         FactoryAuthLib.requireAuthorizedFactory(REGISTRY, msg.sender);
         _requireNonZero(bucketInfoAddr);
-        _requireNonZero(oneInchRouterAddr);
 
         __ERC20_init(name, symbol);
         __ERC20Burnable_init();
@@ -191,7 +191,6 @@ contract PassiveBucket is BucketVaultBase {
         // __UUPSUpgradeable_init();
 
         bucketInfo = IBucketInfo(bucketInfoAddr);
-        oneInchRouter = oneInchRouterAddr;
 
         rebalanceOwnerFeeBps = 800; // 8% default
         rebalanceCallerFeeBps = 500; // 5% default
@@ -376,26 +375,26 @@ contract PassiveBucket is BucketVaultBase {
 
     /**
      * @notice Rebalance the portfolio via 1inch aggregation router
-     * @dev Callable by any shareholder. Builds the router calldata from typed parameters
-     * internally, so there is no arbitrary-calldata surface. Value loss must stay under the
-     * per-call cap and within the cumulative per-epoch budget. Fees: 6% of increase to owner,
-     * 3% to caller.
+     * @dev Callable by any shareholder. Caller-supplied router calldata is constrained by the
+     * shared 1inch calldata guard and value-loss limits. Fees: 6% of increase to owner, 3% to caller.
      * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
      * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
      * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
      * @param minReturn Minimum acceptable `dstToken` out; must clear an oracle-derived floor.
+     * @param routerCalldata Caller-supplied 1inch route calldata, validated by the shared guard.
      */
-    function rebalanceBy1inch(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
-        external
-        nonReentrant
-        whenNotPaused
-        whenSwapNotPaused
-        whenPlatformOperational
-    {
+    function rebalanceBy1inch(
+        address srcToken,
+        address dstToken,
+        uint256 amount,
+        uint256 minReturn,
+        bytes calldata routerCalldata
+    ) external nonReentrant whenNotPaused whenSwapNotPaused whenPlatformOperational {
         _requireRebalanceCaller();
 
         uint256 beforeTokenPrice = tokenPrice;
-        (uint256 totalValueBefore, uint256 totalValueAfter) = _execute1inchSwap(srcToken, dstToken, amount, minReturn);
+        (uint256 totalValueBefore, uint256 totalValueAfter) =
+            _execute1inchSwap(srcToken, dstToken, amount, minReturn, routerCalldata);
 
         _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
     }
@@ -711,8 +710,17 @@ contract PassiveBucket is BucketVaultBase {
         bucketInfo = IBucketInfo(newBucketInfo);
     }
 
+    function oneInchRouter() external view returns (address) {
+        return ONEINCH_ROUTER;
+    }
+
     function _oneInchRouter() internal view override returns (address) {
-        return oneInchRouter;
+        return ONEINCH_ROUTER;
+    }
+
+    function _lossBoundsForCallerCalldata() internal view override returns (uint256 perCallBps, uint256 epochBps) {
+        if (msg.sender != owner()) return (MAX_VALUE_LOSS_BPS, EPOCH_VALUE_LOSS_BUDGET_BPS);
+        return (maxValueLossBps(), epochValueLossBudgetBps());
     }
 
     function _swapPaused() internal view override returns (bool) {

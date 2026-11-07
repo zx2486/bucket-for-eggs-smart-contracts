@@ -31,8 +31,8 @@ contract ActiveBucket is BucketVaultBase {
     /// @notice BucketInfo contract for token validation and pricing
     IBucketInfo public bucketInfo;
 
-    /// @notice 1inch aggregation router address
-    address public oneInchRouter;
+    /// @dev Deprecated storage slot retained for proxy layout compatibility.
+    address private __deprecated_oneInchRouter;
 
     /// @notice Share price in USD with 8 decimals
     uint256 public tokenPrice;
@@ -61,6 +61,9 @@ contract ActiveBucket is BucketVaultBase {
     /// out by this vault's (customer) owner.
     IImplementationRegistry public immutable REGISTRY;
 
+    /// @notice Fixed 1inch aggregation router address for this implementation.
+    address public immutable ONEINCH_ROUTER;
+
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -71,7 +74,6 @@ contract ActiveBucket is BucketVaultBase {
     event FlashLoan(
         address indexed initiator, address indexed receiver, address indexed token, uint256 amount, uint256 fee
     );
-    event OneInchRouterUpdated(address indexed newRouter);
     event PerformanceFeeDistributed(address indexed recipient, uint256 sharesMinted, uint256 feeValueUsd);
     event PerformancePenaltyBurned(address indexed owner, uint256 sharesBurned, uint256 penaltyValueUsd);
     event PerformanceFeeUpdated(uint256 newFeeBps);
@@ -81,6 +83,7 @@ contract ActiveBucket is BucketVaultBase {
     //////////////////////////////////////////////////////////////*/
 
     error InsufficientBalance();
+    error InvalidOneInchRouter();
     error InsufficientRepayment(uint256 expected, uint256 actual);
 
     /*//////////////////////////////////////////////////////////////
@@ -94,9 +97,11 @@ contract ActiveBucket is BucketVaultBase {
     /// @custom:oz-upgrades-unsafe-allow constructor
     /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
     /// implementations against. Set once at construction and never repointable.
-    constructor(address registry_) {
-        if (registry_ == address(0)) revert ZeroAddress();
+    constructor(address registry_, address router_) {
+        if (registry_ == address(0) || router_ == address(0)) revert ZeroAddress();
+        if (router_.code.length == 0) revert InvalidOneInchRouter();
         REGISTRY = IImplementationRegistry(registry_);
+        ONEINCH_ROUTER = router_;
         _disableInitializers();
     }
 
@@ -107,9 +112,8 @@ contract ActiveBucket is BucketVaultBase {
     /**
      * @notice Initializes the ActiveBucket contract
      * @param bucketInfoAddr The BucketInfo contract address
-     * @param oneInchRouterAddr The 1inch aggregation router address
      */
-    function initialize(address bucketInfoAddr, address oneInchRouterAddr, string memory name, string memory symbol)
+    function initialize(address bucketInfoAddr, string memory name, string memory symbol)
         external
         initializer
     {
@@ -118,7 +122,6 @@ contract ActiveBucket is BucketVaultBase {
         // with an attacker-controlled `bucketInfoAddr`.
         if (!REGISTRY.isAuthorizedFactory(msg.sender)) revert UnauthorizedInitializer();
         if (bucketInfoAddr == address(0)) revert ZeroAddress();
-        if (oneInchRouterAddr == address(0)) revert ZeroAddress();
 
         __ERC20_init(name, symbol);
         __ERC20Burnable_init();
@@ -128,7 +131,6 @@ contract ActiveBucket is BucketVaultBase {
         // __UUPSUpgradeable_init();
 
         bucketInfo = IBucketInfo(bucketInfoAddr);
-        oneInchRouter = oneInchRouterAddr;
 
         performanceFeeBps = 1300; // 13% default
     }
@@ -187,15 +189,18 @@ contract ActiveBucket is BucketVaultBase {
 
     /**
      * @notice Execute a swap via 1inch aggregation router (owner only)
-     * @dev Builds the router calldata from typed parameters internally, so there is no
-     * arbitrary-calldata surface. Does not check distribution or accountability. Value loss
+     * @dev Validates caller-supplied router calldata against typed swap parameters. Does not
+     * check distribution or accountability. Value loss
      * must stay under the per-call cap and within the cumulative per-epoch budget.
      * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
      * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
      * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
      * @param minReturn Minimum acceptable `dstToken` out; must clear an oracle-derived floor.
+     * @param routerCalldata Caller-supplied 1inch calldata validated against these parameters.
      */
-    function swapBy1inch(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
+    function swapBy1inch(
+        address srcToken, address dstToken, uint256 amount, uint256 minReturn, bytes calldata routerCalldata
+    )
         external
         onlyOwner
         // onlyOwner is a pure storage read (owner() comparison) with no external call, so
@@ -212,7 +217,8 @@ contract ActiveBucket is BucketVaultBase {
 
         uint256 beforeTokenPrice = tokenPrice;
 
-        (uint256 totalValueBefore, uint256 totalValueAfter) = _execute1inchSwap(srcToken, dstToken, amount, minReturn);
+        (uint256 totalValueBefore, uint256 totalValueAfter) =
+            _execute1inchSwap(srcToken, dstToken, amount, minReturn, routerCalldata);
 
         // Keep the held-tokens registry accurate: a swap can move this vault from holding zero
         // of `dstToken` to holding some, or some `srcToken` down to zero.
@@ -232,7 +238,7 @@ contract ActiveBucket is BucketVaultBase {
     /**
      * @notice Execute several 1inch swaps in one call (owner only), e.g. trading multiple
      * held tokens into one or more others to change the portfolio composition in a single
-     * transaction.
+     * transaction. Each leg includes caller-supplied calldata validated against its typed intent.
      * @dev Each leg is independently validated and value-checked exactly as `swapBy1inch`
      * checks its single leg; only the swap cooldown is shared across all legs.
      * @param legs The ordered list of swaps to execute, one `swapBy1inch`-style leg each.
@@ -365,16 +371,6 @@ contract ActiveBucket is BucketVaultBase {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Update the 1inch router address
-     * @param newRouter New router address
-     */
-    function setOneInchRouter(address newRouter) external onlyOwner whenCallerNotBlacklisted {
-        if (newRouter == address(0)) revert ZeroAddress();
-        oneInchRouter = newRouter;
-        emit OneInchRouterUpdated(newRouter);
-    }
-
-    /**
      * @notice Update the performance fee parameters
      * @param _performanceFeeBps  Performance fee in basis points (e.g., 500 = 5%)
      */
@@ -387,6 +383,10 @@ contract ActiveBucket is BucketVaultBase {
     /*//////////////////////////////////////////////////////////////
                           VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
+
+    function oneInchRouter() external view returns (address) {
+        return ONEINCH_ROUTER;
+    }
 
     /*//////////////////////////////////////////////////////////////
                       INTERNAL FUNCTIONS
@@ -472,7 +472,7 @@ contract ActiveBucket is BucketVaultBase {
     }
 
     function _oneInchRouter() internal view override returns (address) {
-        return oneInchRouter;
+        return ONEINCH_ROUTER;
     }
 
     function _swapPaused() internal view override returns (bool) {

@@ -126,7 +126,71 @@ The `test-activebucket-sepolia.sh`, `test-passivebucket-sepolia.sh`, `test-purem
 
 Use a dedicated Sepolia test wallet via `SMOKE_PRIVATE_KEY`; do not use the platform deployer/registry owner key. The requested PassiveBucket sequence can be configured with `SMOKE_DEPOSIT_WEI=500000000000000000`, `SMOKE_REBALANCE=YES`, and `SMOKE_REDEEM_BPS=5000`. The ActiveBucket request can use `SMOKE_DEPOSIT_WEI=100000000000000000`, `SMOKE_REDEEM_FOR_STABLE_BPS=8000`, `SMOKE_STABLE_TOKEN_SYMBOL=USDC`, and `SMOKE_MAX_SLIPPAGE_BPS=50`. Note that `redeemForStable` must swap each non-USDC basket token through the configured router; it can revert if the swap route/liquidity or token allowance requirements are not met. PureMembership accepts `SMOKE_MEMBERSHIP_TOKEN_ID=1` and `SMOKE_MEMBERSHIP_PAY_SECTION=1`; when not supplied, the script calculates an ETH payment cap from the current on-chain ETH price with a default 20% buffer, adjustable by `SMOKE_MEMBERSHIP_BUFFER_BPS`. Supplying `SMOKE_MEMBERSHIP_MAX_PAYMENT` overrides that cap in wei. These are write transactions, consume gas/assets, and are not automatically reversible; run one smoke script at a time after reviewing its preflight output.
 
-Upgrade deployment tooling is intentionally omitted from this public deployment path: upgrades require a separately queued implementation, a 48-hour wait, and live registry approval at execution. Follow the platform's reviewed upgrade procedure rather than bypassing those controls.
+## Upgrading existing Sepolia vaults
+
+Use `script/upgrade-vaults-sepolia.sh` to upgrade existing ActiveBucket and PassiveBucket proxies through the registry approval and 48-hour timelock. Run each phase separately; the script is Sepolia-only and checks the targets, signer role, registry, implementation, pending queue, and timelock. It does not source `.env`. Export the required variables in your shell, and never put secret values in command history or documentation.
+
+Before starting, confirm the deployed vault implementations' source commit and have the storage-layout comparison reviewed. Confirm the proxy addresses from the authoritative deployment records; do not infer them from `.env`, `broadcast/`, or `configs/sepolia.json`. Export at least one proxy address of each kind; comma-separate multiple addresses. Each write phase requires a key that has the required role for every target in that phase.
+
+```sh
+export SEPOLIA_RPC_URL='<Sepolia RPC URL>'
+export ACTIVE_BUCKET_PROXY_ADDRESS='<ActiveBucket proxy>[,<another ActiveBucket proxy>]'
+export PASSIVE_BUCKET_PROXY_ADDRESS='<PassiveBucket proxy>[,<another PassiveBucket proxy>]'
+```
+
+First run the read-only snapshot phase and save the JSON object it prints. Keep it unchanged for the final `check` phase; the check verifies that vault state is preserved across the upgrade. Foundry may query its default simulation sender during this read-only phase; if the RPC rejects that account lookup, set `UPGRADE_SCRIPT_SENDER` to a known on-chain account to override the simulation sender.
+
+```sh
+UPGRADE_SCRIPT_SENDER=... UPGRADE_PHASE=snapshot bash script/upgrade-vaults-sepolia.sh
+```
+
+Run these phases in order. The wrapper defaults to a dry run; inspect each simulation, then repeat each write phase with `--broadcast` only when the human operator has reviewed and approved the transactions. Broadcasting also requires `CONFIRM_SEPOLIA_VAULT_UPGRADE=YES`:
+
+```sh
+export CONFIRM_SEPOLIA_VAULT_UPGRADE=YES
+```
+
+1. **Deploy implementations.** The deployer key is used to deploy both implementations; record the printed addresses. The wrapper uses `--gas-estimate-multiplier 400` by default for Sepolia contract creation; override it with `SEPOLIA_UPGRADE_GAS_MULTIPLIER` only if a measured estimate requires adjustment. Foundry may also emit `CREATE2` transactions to the standard deterministic deployment proxy while deploying Solidity libraries linked into the implementations. Existing ActiveBucket and PassiveBucket deployment scripts use the same mechanism; these are library deployments, not vault calls to an unrelated contract.
+
+   ```sh
+   export PRIVATE_KEY='<deployer private key>'
+   UPGRADE_PHASE=deploy-impl bash script/upgrade-vaults-sepolia.sh
+   UPGRADE_PHASE=deploy-impl bash script/upgrade-vaults-sepolia.sh --broadcast
+   ```
+
+2. **Approve implementations.** Set the new implementation addresses printed above. The key must own the `ImplementationRegistry` used by the target proxies.
+
+   ```sh
+   export NEW_ACTIVE_IMPLEMENTATION='<new ActiveBucket implementation>'
+   export NEW_PASSIVE_IMPLEMENTATION='<new PassiveBucket implementation>'
+   export PRIVATE_KEY='<ImplementationRegistry owner private key>'
+   UPGRADE_PHASE=approve bash script/upgrade-vaults-sepolia.sh
+   UPGRADE_PHASE=approve bash script/upgrade-vaults-sepolia.sh --broadcast
+   ```
+
+3. **Queue each upgrade.** The key must own every target vault. Queueing starts the 48-hour investor exit window.
+
+   ```sh
+   export PRIVATE_KEY='<target vault owner private key>'
+   UPGRADE_PHASE=queue bash script/upgrade-vaults-sepolia.sh
+   UPGRADE_PHASE=queue bash script/upgrade-vaults-sepolia.sh --broadcast
+   ```
+
+4. **Wait at least 48 hours**, then execute with the target vault owner's key. Execution re-checks that the implementation is still approved.
+
+   ```sh
+   UPGRADE_PHASE=execute bash script/upgrade-vaults-sepolia.sh
+   UPGRADE_PHASE=execute bash script/upgrade-vaults-sepolia.sh --broadcast
+   ```
+
+5. **Check the result.** Export the exact pre-upgrade snapshot JSON as `UPGRADE_SNAPSHOT_JSON`, then run the read-only check. It verifies implementation and router addresses, cleared queue, preserved vault state and disabled `redeemForStable` stub.
+
+   ```sh
+   export UPGRADE_SNAPSHOT_JSON='<paste the complete JSON object printed by the snapshot phase>'
+   UPGRADE_PHASE=check bash script/upgrade-vaults-sepolia.sh
+   ```
+
+The `--broadcast` commands submit real Sepolia transactions and spend gas; only a human should run them. Do not use a target whose deployed implementation lacks the 48-hour upgrade queue—the script intentionally stops instead of bypassing the timelock. Existing factories retain their immutable old implementations, so newly created vaults require separately deployed and configured factories.
 
 `DeployMockTokens.s.sol` and `deploy-mock-tokens-sepolia.sh` are for development/test fixtures only. Mock assets are not production tokens; update configuration and validate feeds deliberately if using them.
 

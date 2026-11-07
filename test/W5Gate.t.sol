@@ -408,12 +408,12 @@ contract W5GateStableExitAtomicityTest is Test {
         // test contract itself must be an authorized "factory".
         registry.setAuthorizedFactory(address(this), true);
 
-        passiveImpl = new PassiveBucket(address(registry));
+        passiveImpl = new PassiveBucket(address(registry), address(this));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 1);
         dists[1] = PassiveBucket.BucketDistribution(address(stable), 99);
         bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector, address(bucketInfo), dists, address(router), "Passive Share", "pBKT"
+            PassiveBucket.initialize.selector, address(bucketInfo), dists, "Passive Share", "pBKT"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(passiveImpl), initData);
         passive = PassiveBucket(payable(address(proxy)));
@@ -435,7 +435,7 @@ contract W5GateStableExitAtomicityTest is Test {
         uint256 userStableBefore = stable.balanceOf(user1);
 
         vm.prank(user1);
-        vm.expectPartialRevert(BucketVaultBase.ReceivedBelowMinReturn.selector);
+        vm.expectRevert(BucketVaultBase.RedeemForStableDisabled.selector);
         passive.redeemForStable(sharesBefore, address(stable), 0);
 
         assertEq(passive.balanceOf(user1), sharesBefore, "shares must survive a short-paid leg completely unburned");
@@ -473,12 +473,12 @@ contract W5GateFlashLoanCompositionTest is Test {
         bucketInfo.addToken(address(0), ETH_PRICE);
 
         registry = new ImplementationRegistry(ownerAddr);
-        activeImpl = new ActiveBucket(address(registry));
+        activeImpl = new ActiveBucket(address(registry), address(this));
         // Task #33 (W1.7 direct-proxy-bypass fix): this test deploys its proxy directly, so the
         // test contract itself must be an authorized "factory".
         registry.setAuthorizedFactory(address(this), true);
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, address(bucketInfo), address(0xDEAD), "Active Share", "aBKT"
+            ActiveBucket.initialize.selector, address(bucketInfo), "Active Share", "aBKT"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(activeImpl), initData);
         active = ActiveBucket(payable(address(proxy)));
@@ -528,12 +528,12 @@ contract W5GateFlashLoanHolderTest is Test {
         bucketInfo.addToken(address(0), ETH_PRICE);
 
         registry = new ImplementationRegistry(ownerAddr);
-        activeImpl = new ActiveBucket(address(registry));
+        activeImpl = new ActiveBucket(address(registry), address(this));
         // Task #33 (W1.7 direct-proxy-bypass fix): this test deploys its proxy directly, so the
         // test contract itself must be an authorized "factory".
         registry.setAuthorizedFactory(address(this), true);
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, address(bucketInfo), address(0xDEAD), "Active Share", "aBKT"
+            ActiveBucket.initialize.selector, address(bucketInfo), "Active Share", "aBKT"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(activeImpl), initData);
         active = ActiveBucket(payable(address(proxy)));

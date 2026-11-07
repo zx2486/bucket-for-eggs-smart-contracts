@@ -31,7 +31,6 @@ contract PassiveBucketFactory {
 
     error InvalidImplementation();
     error InvalidBucketInfo();
-    error InvalidOneInchRouter();
 
     /**
      * @notice Constructor
@@ -52,23 +51,18 @@ contract PassiveBucketFactory {
      * The BucketInfo address is this factory's own immutable {bucketInfo} — it is not a
      * caller-supplied parameter.
      * @param distributions    Initial token distributions (weights must sum to 100)
-     * @param oneInchRouter    Address of the 1inch aggregation router
      * @param name             ERC-20 token name for the share token
      * @param symbol           ERC-20 token symbol for the share token
      * @return proxy Address of the newly deployed PassiveBucket proxy
      */
     function createPassiveBucket(
         PassiveBucket.BucketDistribution[] calldata distributions,
-        address oneInchRouter,
         string calldata name,
         string calldata symbol
     ) external returns (address proxy) {
-        if (oneInchRouter == address(0)) revert InvalidOneInchRouter();
-
         // Encode the initializer call using the factory's own immutable bucketInfo, never a
         // caller-supplied value.
-        bytes memory initData =
-            abi.encodeCall(PassiveBucket.initialize, (bucketInfo, distributions, oneInchRouter, name, symbol));
+        bytes memory initData = abi.encodeCall(PassiveBucket.initialize, (bucketInfo, distributions, name, symbol));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = address(new ERC1967Proxy(implementation, initData));

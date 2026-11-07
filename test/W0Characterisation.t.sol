@@ -60,7 +60,7 @@ contract W0CharacterisationPassiveBucketTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry));
+        implementation = new PassiveBucket(address(registry), address(this));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -72,7 +72,6 @@ contract W0CharacterisationPassiveBucketTest is Test {
             PassiveBucket.initialize.selector,
             address(bucketInfo),
             dists,
-            address(oneInchRouter),
             "PassiveBucket Share",
             "pBKT"
         );
@@ -97,24 +96,15 @@ contract W0CharacterisationPassiveBucketTest is Test {
 
         vm.prank(user1);
         vm.expectRevert(BucketVaultBase.SameToken.selector);
-        bucket.rebalanceBy1inch(address(0), address(0), 1, 0);
+        bucket.rebalanceBy1inch(address(0), address(0), 1, 0, bytes(""));
     }
 
-    function test_CharacterisationInitializeAcceptsAnyNonzeroRouterAddressNoCodeCheck() public {
+    function test_CharacterisationImplementationRejectsRouterWithoutCode() public {
         address plainEOA = makeAddr("plainEOAWithNoCode");
         assertEq(plainEOA.code.length, 0);
 
-        PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
-        dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
-        dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 30);
-        dists[2] = PassiveBucket.BucketDistribution(address(tokenB), 20);
-
-        bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector, address(bucketInfo), dists, plainEOA, "PassiveBucket Share", "pBKT"
-        );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-
-        assertEq(PassiveBucket(payable(address(proxy))).oneInchRouter(), plainEOA);
+        vm.expectRevert(PassiveBucket.InvalidOneInchRouter.selector);
+        new PassiveBucket(address(new ImplementationRegistry(address(this))), plainEOA);
     }
 
     function test_CharacterisationUpdateBucketInfoGatedOnBucketInfoOwnerNotVaultOwner() public {

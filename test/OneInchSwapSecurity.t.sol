@@ -158,7 +158,7 @@ contract PostFixRebalanceBy1inchAttackBlockedTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry));
+        implementation = new PassiveBucket(address(registry), address(this));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
@@ -168,7 +168,6 @@ contract PostFixRebalanceBy1inchAttackBlockedTest is Test {
             PassiveBucket.initialize.selector,
             address(bucketInfo),
             dists,
-            address(maliciousRouter),
             "PassiveBucket Share",
             "pBKT"
         );
@@ -197,7 +196,7 @@ contract PostFixRebalanceBy1inchAttackBlockedTest is Test {
         for (uint256 i = 0; i < 10; i++) {
             vm.prank(attacker);
             vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.InvalidToken.selector, fakeDst));
-            bucket.rebalanceBy1inch(address(tokenB), fakeDst, 1_000e6, 0);
+            bucket.rebalanceBy1inch(address(tokenB), fakeDst, 1_000e6, 0, bytes(""));
         }
 
         assertEq(tokenB.balanceOf(address(bucket)), initialVaultBalance);
@@ -207,7 +206,7 @@ contract PostFixRebalanceBy1inchAttackBlockedTest is Test {
     function test_PostFix_RebalanceBy1inch_RejectsSameTokenSwap() public {
         vm.prank(attacker);
         vm.expectRevert(BucketVaultBase.SameToken.selector);
-        bucket.rebalanceBy1inch(address(tokenB), address(tokenB), 1_000e6, 0);
+        bucket.rebalanceBy1inch(address(tokenB), address(tokenB), 1_000e6, 0, bytes(""));
     }
 }
 

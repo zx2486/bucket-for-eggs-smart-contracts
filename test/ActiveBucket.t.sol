@@ -211,18 +211,18 @@ contract ActiveBucketTest is Test {
         bucketInfo = new MockBucketInfoForActive();
         tokenA = new MockERC20ForActive("Token A", "TKA", 18);
         tokenB = new MockERC20ForActive("Token B", "TKB", 6);
-        oneInchRouter = makeAddr("oneInchRouter");
+        oneInchRouter = address(bucketInfo);
 
         bucketInfo.addToken(address(0), ETH_PRICE);
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         registry = new ImplementationRegistry(owner);
-        implementation = new ActiveBucket(address(registry));
+        implementation = new ActiveBucket(address(registry), oneInchRouter);
         registry.setAuthorizedFactory(address(this), true);
 
         bytes memory initData =
-            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, NAME, SYMBOL);
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), NAME, SYMBOL);
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         bucket = ActiveBucket(payable(address(proxy)));
 
@@ -245,32 +245,28 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertInitializeZeroBucketInfo() public {
-        ActiveBucket impl = new ActiveBucket(address(registry));
+        ActiveBucket impl = new ActiveBucket(address(registry), oneInchRouter);
 
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
         bytes memory initData =
-            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(0), oneInchRouter, NAME, SYMBOL);
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(0), NAME, SYMBOL);
         new ERC1967Proxy(address(impl), initData);
     }
 
     function test_RevertInitializeZeroOneInch() public {
-        ActiveBucket impl = new ActiveBucket(address(registry));
-
         vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
-        bytes memory initData =
-            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), address(0), NAME, SYMBOL);
-        new ERC1967Proxy(address(impl), initData);
+        new ActiveBucket(address(registry), address(0));
     }
 
     function test_RevertDoubleInitialize() public {
         vm.expectRevert();
-        bucket.initialize(address(bucketInfo), oneInchRouter, NAME, SYMBOL);
+        bucket.initialize(address(bucketInfo), NAME, SYMBOL);
     }
 
     function test_InitializeCustomNameAndSymbol() public {
-        ActiveBucket impl = new ActiveBucket(address(registry));
+        ActiveBucket impl = new ActiveBucket(address(registry), oneInchRouter);
         bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, "My Active Bucket", "MAB"
+            ActiveBucket.initialize.selector, address(bucketInfo), "My Active Bucket", "MAB"
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         ActiveBucket customBucket = ActiveBucket(payable(address(proxy)));
@@ -735,52 +731,32 @@ contract ActiveBucketTest is Test {
     function test_RevertSwapBy1inchNotOwner() public {
         vm.prank(user1);
         vm.expectRevert();
-        bucket.swapBy1inch(address(0), address(0), 1, 0);
+        bucket.swapBy1inch(address(0), address(0), 1, 0, bytes(""));
     }
 
     function test_RevertSwapBy1inchSwapPaused() public {
         bucket.pauseSwap();
 
         vm.expectRevert(BucketVaultBase.SwapIsPaused.selector);
-        bucket.swapBy1inch(address(0), address(0), 1, 0);
+        bucket.swapBy1inch(address(0), address(0), 1, 0, bytes(""));
     }
 
     function test_RevertSwapBy1inchPlatformDown() public {
         bucketInfo.setOperational(false);
 
         vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
-        bucket.swapBy1inch(address(0), address(0), 1, 0);
+        bucket.swapBy1inch(address(0), address(0), 1, 0, bytes(""));
     }
 
     function test_RevertSwapBy1inchWhenContractPaused() public {
         bucket.pause();
 
         vm.expectRevert();
-        bucket.swapBy1inch(address(0), address(0), 1, 0);
+        bucket.swapBy1inch(address(0), address(0), 1, 0, bytes(""));
     }
 
-    function test_SetOneInchRouter() public {
-        address newRouter = makeAddr("newRouter");
-        bucket.setOneInchRouter(newRouter);
-        assertEq(bucket.oneInchRouter(), newRouter);
-    }
-
-    function test_SetOneInchRouterEmitsEvent() public {
-        address newRouter = makeAddr("newRouter");
-        vm.expectEmit(true, false, false, false);
-        emit ActiveBucket.OneInchRouterUpdated(newRouter);
-        bucket.setOneInchRouter(newRouter);
-    }
-
-    function test_RevertSetOneInchRouterZero() public {
-        vm.expectRevert(BucketVaultBase.ZeroAddress.selector);
-        bucket.setOneInchRouter(address(0));
-    }
-
-    function test_RevertSetOneInchRouterNotOwner() public {
-        vm.prank(user1);
-        vm.expectRevert();
-        bucket.setOneInchRouter(makeAddr("newRouter"));
+    function test_OneInchRouterIsImplementationImmutable() public view {
+        assertEq(bucket.oneInchRouter(), oneInchRouter);
     }
 
     function test_SetPerformanceFee() public {
@@ -1236,7 +1212,7 @@ contract ActiveBucketTest is Test {
     }
 
     function _deployApprovedActiveBucketImplementation() internal returns (address newImpl) {
-        newImpl = address(new ActiveBucket(address(registry)));
+        newImpl = address(new ActiveBucket(address(registry), oneInchRouter));
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
     }
 
@@ -1316,7 +1292,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertUpgrade_NeverApproved() public {
-        address newImpl = address(new ActiveBucket(address(registry)));
+        address newImpl = address(new ActiveBucket(address(registry), oneInchRouter));
 
         bucket.queueUpgrade(newImpl);
         vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
@@ -1379,14 +1355,14 @@ contract ActiveBucketTest is Test {
 
     function test_RevertUpgrade_PlatformCannotTrigger() public {
         bytes memory initData =
-            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), oneInchRouter, NAME, SYMBOL);
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, address(bucketInfo), NAME, SYMBOL);
         registry.setAuthorizedFactory(user2, true);
         vm.prank(user2);
         ERC1967Proxy customerProxy = new ERC1967Proxy(address(implementation), initData);
         ActiveBucket customerBucket = ActiveBucket(payable(address(customerProxy)));
         assertEq(customerBucket.owner(), user2, "customerBucket must be owned by the customer, not the platform");
 
-        address newImpl = address(new ActiveBucket(address(registry)));
+        address newImpl = address(new ActiveBucket(address(registry), oneInchRouter));
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
 
         vm.expectRevert();
@@ -1401,7 +1377,7 @@ contract ActiveBucketTest is Test {
     }
 
     function test_RevertUpgrade_ApprovedForWrongKind() public {
-        address newImpl = address(new ActiveBucket(address(registry)));
+        address newImpl = address(new ActiveBucket(address(registry), oneInchRouter));
         registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
 
         bucket.queueUpgrade(newImpl);

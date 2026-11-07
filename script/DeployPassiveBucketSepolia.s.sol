@@ -51,14 +51,14 @@ contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        PassiveBucket implementation = new PassiveBucket(config.registry);
+        PassiveBucket implementation = new PassiveBucket(config.registry, config.oneInchRouter);
         PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), config.bucketInfo);
 
         IImplementationRegistry registry = IImplementationRegistry(config.registry);
         registry.setAuthorizedFactory(address(factory), true);
         registry.approve(IImplementationRegistry.Kind.PassiveBucket, address(implementation));
 
-        address proxy = factory.createPassiveBucket(distributions, config.oneInchRouter, config.name, config.symbol);
+        address proxy = factory.createPassiveBucket(distributions, config.name, config.symbol);
         PassiveBucket bucket = PassiveBucket(payable(proxy));
         bucket.configureDEX(0, config.dexRouter, config.dexQuoter, config.dexFee, true);
         bucket.setWETH(config.weth);

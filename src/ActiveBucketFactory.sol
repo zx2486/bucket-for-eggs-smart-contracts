@@ -35,7 +35,6 @@ contract ActiveBucketFactory {
 
     error InvalidImplementation();
     error InvalidBucketInfo();
-    error InvalidOneInchRouter();
 
     /**
      * @notice Constructor
@@ -56,20 +55,14 @@ contract ActiveBucketFactory {
      * not owner-exclusive.
      * The BucketInfo address is this factory's own immutable {bucketInfo} — it is not a
      * caller-supplied parameter.
-     * @param oneInchRouter    Address of the 1inch aggregation router
      * @param name             ERC-20 token name for the share token
      * @param symbol           ERC-20 token symbol for the share token
      * @return proxy Address of the newly deployed ActiveBucket proxy
      */
-    function createActiveBucket(address oneInchRouter, string calldata name, string calldata symbol)
-        external
-        returns (address proxy)
-    {
-        if (oneInchRouter == address(0)) revert InvalidOneInchRouter();
-
+    function createActiveBucket(string calldata name, string calldata symbol) external returns (address proxy) {
         // Encode the initializer call using the factory's own immutable bucketInfo, never a
         // caller-supplied value.
-        bytes memory initData = abi.encodeCall(ActiveBucket.initialize, (bucketInfo, oneInchRouter, name, symbol));
+        bytes memory initData = abi.encodeCall(ActiveBucket.initialize, (bucketInfo, name, symbol));
 
         // Deploy a new ERC-1967 UUPS proxy pointing at the shared implementation
         proxy = address(new ERC1967Proxy(implementation, initData));

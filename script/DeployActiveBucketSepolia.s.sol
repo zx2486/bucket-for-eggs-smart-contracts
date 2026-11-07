@@ -31,14 +31,14 @@ contract DeployActiveBucketSepolia is SepoliaDeploymentConfig {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        ActiveBucket implementation = new ActiveBucket(registryAddr);
+        ActiveBucket implementation = new ActiveBucket(registryAddr, router);
         ActiveBucketFactory factory = new ActiveBucketFactory(address(implementation), bucketInfoAddr);
 
         IImplementationRegistry registry = IImplementationRegistry(registryAddr);
         registry.setAuthorizedFactory(address(factory), true);
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, address(implementation));
 
-        address proxy = factory.createActiveBucket(router, name, symbol);
+        address proxy = factory.createActiveBucket(name, symbol);
         ActiveBucket bucket = ActiveBucket(payable(proxy));
         if (performanceFeeBps != bucket.performanceFeeBps()) {
             bucket.setPerformanceFee(performanceFeeBps);

@@ -24,6 +24,7 @@ import {GovernanceLib} from "../libraries/GovernanceLib.sol";
 import {OraclePricingLib} from "../libraries/OraclePricingLib.sol";
 import {PayoutLib} from "../libraries/PayoutLib.sol";
 import {SwapExecutionLib} from "../libraries/SwapExecutionLib.sol";
+import {OneInchCalldataLib} from "../libraries/OneInchCalldataLib.sol";
 
 /// @title Shared base for active and passive vaults.
 abstract contract BucketVaultBase is
@@ -132,6 +133,7 @@ abstract contract BucketVaultBase is
     error RenounceOwnershipDisabled();
     error OwnerNotAccountable();
     error MaxValueLossBpsExceedsCeiling(uint256 requested);
+    error RedeemForStableDisabled();
 
     event Deposited(
         address indexed user, address indexed token, uint256 amount, uint256 sharesMinted, uint256 depositValueUsd
@@ -312,12 +314,11 @@ abstract contract BucketVaultBase is
         return IERC20Metadata(token).decimals();
     }
 
-    /// @dev Transfer a token or native ETH. Every current caller (recoverTokens,
-    /// redeemForStable, and ActiveBucket.flashLoan) is nonReentrant, and nonReentrant is a
-    /// single contract-wide lock (ReentrancyGuardTransient), so a reentrant call here cannot
-    /// re-enter any other nonReentrant-guarded function either. `to` is always a
-    /// caller-authenticated address (the owner for recoverTokens, msg.sender for
-    /// redeemForStable, the flash-loan receiver for flashLoan), not an arbitrary unvalidated
+    /// @dev Transfer a token or native ETH. Every current caller (recoverTokens and
+    /// ActiveBucket.flashLoan) is nonReentrant, and nonReentrant is a single contract-wide
+    /// lock (ReentrancyGuardTransient), so a reentrant call here cannot re-enter any other
+    /// nonReentrant-guarded function either. `to` is always a caller-authenticated address
+    /// (the owner for recoverTokens, the flash-loan receiver for flashLoan), not an arbitrary unvalidated
     /// address. forge-lint's reentrancy-eth/reentrancy-balance analysis flags this call site
     /// directly rather than tracing nonReentrant through all callers, so it fires regardless
     /// of caller context -- confirmed false positive, suppressed below.
@@ -572,20 +573,17 @@ abstract contract BucketVaultBase is
     /// @dev Selector for the typed 1inch swap function.
     // casting to 'bytes4' is safe because this is the standard 4-byte function-selector
     // derivation (truncating a keccak256 hash to its first 4 bytes), not a value reinterpretation.
-    bytes4 public constant ONEINCH_SWAP_SELECTOR =
-    // forge-lint: disable-next-line(unsafe-typecast)
-    bytes4(keccak256("execute1inchSwap(address,address,address,uint256,uint256)"));
-
-    /// @dev Execute a validated 1inch swap.
-    function _execute1inchSwap(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
-        internal
-        returns (uint256 totalValueBefore, uint256 totalValueAfter)
-    {
+    /// @dev Execute a validated caller-calldata 1inch swap.
+    function _execute1inchSwap(
+        address srcToken,
+        address dstToken,
+        uint256 amount,
+        uint256 minReturn,
+        bytes calldata routerCalldata
+    ) internal returns (uint256 totalValueBefore, uint256 totalValueAfter) {
         _validateSwapLeg(srcToken, dstToken, amount, minReturn);
-
         _enforceSwapCooldown(msg.sender);
-
-        return _executeSwapNoCooldown(srcToken, dstToken, amount, minReturn);
+        return _executeSwapWithCalldataNoCooldown(srcToken, dstToken, amount, minReturn, routerCalldata);
     }
 
     /// @dev One leg of a multi-leg swap: see `_executeMultiLegSwap`.
@@ -594,9 +592,10 @@ abstract contract BucketVaultBase is
         address dstToken;
         uint256 amount;
         uint256 minReturn;
+        bytes routerCalldata;
     }
 
-    /// @dev Execute several swap legs under one cooldown charge.
+    /// @dev Execute several caller-calldata swap legs under one cooldown charge.
     function _executeMultiLegSwap(SwapLeg[] calldata legs)
         internal
         returns (uint256 totalValueBefore, uint256 totalValueAfter)
@@ -604,12 +603,13 @@ abstract contract BucketVaultBase is
         if (legs.length == 0) revert EmptyLegs();
 
         _enforceSwapCooldown(msg.sender);
-
         totalValueBefore = _calculateTotalValue();
-        for (uint256 i = 0; i < legs.length; i++) {
+        for (uint256 i; i < legs.length; ++i) {
             SwapLeg calldata leg = legs[i];
             _validateSwapLeg(leg.srcToken, leg.dstToken, leg.amount, leg.minReturn);
-            _executeSwapNoCooldown(leg.srcToken, leg.dstToken, leg.amount, leg.minReturn);
+            _executeSwapWithCalldataNoCooldown(
+                leg.srcToken, leg.dstToken, leg.amount, leg.minReturn, leg.routerCalldata
+            );
         }
         totalValueAfter = _calculateTotalValue();
     }
@@ -619,18 +619,27 @@ abstract contract BucketVaultBase is
         SwapExecutionLib.validateSwapLeg(_bucketInfo(), srcToken, dstToken, amount, minReturn);
     }
 
-    /// @dev Dispatch the swap and enforce value-loss limits.
-    function _executeSwapNoCooldown(address srcToken, address dstToken, uint256 amount, uint256 minReturn)
-        internal
-        returns (uint256 totalValueBefore, uint256 totalValueAfter)
-    {
+    /// @dev Execute caller-supplied calldata and enforce value-loss limits.
+    function _executeSwapWithCalldataNoCooldown(
+        address srcToken,
+        address dstToken,
+        uint256 amount,
+        uint256 minReturn,
+        bytes calldata routerCalldata
+    ) internal returns (uint256 totalValueBefore, uint256 totalValueAfter) {
         totalValueBefore = _calculateTotalValue();
-
-        SwapExecutionLib.dispatchSwap(_oneInchRouter(), ONEINCH_SWAP_SELECTOR, srcToken, dstToken, amount, minReturn);
-
+        address[] memory protectedTokens = _getBucketVaultBaseStorage().heldTokens.values();
+        OneInchCalldataLib.SwapRequest memory request = OneInchCalldataLib.SwapRequest({
+            router: _oneInchRouter(),
+            srcToken: srcToken,
+            dstToken: dstToken,
+            amount: amount,
+            minReturn: minReturn,
+            routerCalldata: routerCalldata
+        });
+        OneInchCalldataLib.executeSwap(_bucketInfo(), protectedTokens, request);
         totalValueAfter = _calculateTotalValue();
-
-        _checkValueLossAndConsumeBudget(totalValueBefore, totalValueAfter);
+        _checkCallerCalldataValueLossAndConsumeBudget(totalValueBefore, totalValueAfter);
     }
 
     /// @dev Enforce the per-swap and cumulative loss limits.
@@ -642,6 +651,17 @@ abstract contract BucketVaultBase is
             maxValueLossBps(),
             epochValueLossBudgetBps()
         );
+    }
+
+    function _checkCallerCalldataValueLossAndConsumeBudget(uint256 totalValueBefore, uint256 totalValueAfter) private {
+        (uint256 perCallBps, uint256 epochBps) = _lossBoundsForCallerCalldata();
+        SwapExecutionLib.checkValueLossAndConsumeBudget(
+            _getBucketVaultBaseStorage().epochLossBudget, totalValueBefore, totalValueAfter, perCallBps, epochBps
+        );
+    }
+
+    function _lossBoundsForCallerCalldata() internal view virtual returns (uint256 perCallBps, uint256 epochBps) {
+        return (maxValueLossBps(), epochValueLossBudgetBps());
     }
 
     /// @notice Set per-swap and per-epoch value-loss limits.
@@ -664,15 +684,6 @@ abstract contract BucketVaultBase is
     function epochValueLossBudgetBps() public view returns (uint256) {
         uint256 bps = _getBucketVaultBaseStorage().maxValueLossBps.epochBudgetBps;
         return bps == 0 ? EPOCH_VALUE_LOSS_BUDGET_BPS : bps;
-    }
-
-    /// @dev Calculate the minimum output for a stable-token redemption leg.
-    function _minReturnForStableLeg(address srcToken, address dstToken, uint256 amount, uint256 maxSlippageBps)
-        internal
-        view
-        returns (uint256 minReturn)
-    {
-        return SwapExecutionLib.minReturnForStableLeg(_bucketInfo(), srcToken, dstToken, amount, maxSlippageBps);
     }
 
     /// @dev Enforce caller and global swap cooldowns.
@@ -753,60 +764,9 @@ abstract contract BucketVaultBase is
         PayoutLib.payoutAndSync(_getBucketVaultBaseStorage().heldTokens, to, tokens, returnAmounts);
     }
 
-    /**
-     * @notice Redeem shares for a single destination token.
-     */
-    function redeemForStable(uint256 shares, address dstToken, uint256 maxSlippageBps)
-        external
-        nonReentrant
-        whenNotPaused
-        whenPlatformOperational
-        whenSwapNotPaused
-        returns (uint256 totalStableOut)
-    {
-        if (!_bucketInfo().isTokenValid(dstToken)) revert InvalidToken(dstToken);
-
-        bool isOwnerCaller = (msg.sender == owner());
-        if (isOwnerCaller && !isBucketAccountable()) revert OwnerNotAccountable();
-
-        (address[] memory tokens, uint256[] memory amounts) = _previewRedeemCore(shares);
-
-        _burn(msg.sender, shares);
-
-        _enforceSwapCooldown(msg.sender);
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 amount = amounts[i];
-            if (amount == 0) continue;
-
-            if (tokens[i] == dstToken) {
-                totalStableOut += amount;
-                continue;
-            }
-
-            uint256 legMinReturn = _minReturnForStableLeg(tokens[i], dstToken, amount, maxSlippageBps);
-            _validateSwapLeg(tokens[i], dstToken, amount, legMinReturn);
-
-            uint256 dstBalBefore = _getTokenBalance(dstToken);
-            _executeSwapNoCooldown(tokens[i], dstToken, amount, legMinReturn);
-            uint256 received = _getTokenBalance(dstToken) - dstBalBefore;
-
-            if (received < legMinReturn) revert ReceivedBelowMinReturn(received, legMinReturn);
-
-            totalStableOut += received;
-            _syncHeldTokenByBalance(tokens[i]);
-        }
-
-        if (totalStableOut == 0) revert NothingToRedeem();
-
-        _transferToken(dstToken, msg.sender, totalStableOut);
-        _syncHeldTokenByBalance(dstToken);
-        emit TokenReturned(msg.sender, dstToken, totalStableOut);
-
-        if (isOwnerCaller && !isBucketAccountable()) revert OwnerNotAccountable();
-
-        emit RedeemedForStable(msg.sender, shares, totalSupply(), dstToken, totalStableOut, tokens, amounts);
-        _syncOutpricedStatus();
+    /// @notice Disabled; stable-token redemption is provided by the separate RedeemForStable contract.
+    function redeemForStable(uint256, address, uint256) external returns (uint256) {
+        revert RedeemForStableDisabled();
     }
 }
 
