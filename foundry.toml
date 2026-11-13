@@ -6,12 +6,8 @@ solc_version = "0.8.33"
 
 # Optimizer settings
 optimizer = true
-# To lower the contract size under EIP-170. Reduce the optimizer runs to 1.
-# Final margins this wave:
-# PassiveBucket +12 B, ActiveBucket +3,461 B, PureMembership +4,619 B. `forge fmt --check` clean
-# and `forge test` 604/604 pass after (594 pre-existing + 10 new feature tests), hard rule 13.
-# optimizer_runs UNCHANGED at 1 this wave.
-optimizer_runs = 1
+via_ir = true
+optimizer_runs = 10
 
 # EVM version
 evm_version = "cancun"

@@ -338,7 +338,7 @@ contract W4GatePassiveBucketTest is Test {
         bucketInfo.addToken(address(token), TOKEN_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry), address(this));
+        implementation = new PassiveBucket(address(registry));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
@@ -397,19 +397,6 @@ contract W4GatePassiveBucketTest is Test {
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, user1));
         bucket.rebalanceByDefi();
-    }
-
-    function test_G2_Blacklisted_CannotRebalanceBy1inch() public {
-        vm.startPrank(user1);
-        token.approve(address(bucket), USER_DEPOSIT);
-        bucket.deposit(address(token), USER_DEPOSIT);
-        vm.stopPrank();
-
-        bucketInfo.setBlacklisted(user1, true);
-
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(BucketVaultBase.Blacklisted.selector, user1));
-        bucket.rebalanceBy1inch(address(token), address(token), 1, 0, bytes(""));
     }
 
     function test_G4_FailClosed_RevertingBucketInfo_BlocksRedeem() public {

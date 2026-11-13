@@ -8,6 +8,7 @@ import {IBucketInfo} from "./interfaces/IBucketInfo.sol";
 import {IFlashLoanReceiver} from "./interfaces/IFlashLoanReceiver.sol";
 import {IImplementationRegistry} from "./interfaces/IImplementationRegistry.sol";
 import {BucketVaultBase} from "./base/BucketVaultBase.sol";
+import {BucketVaultSwapBase} from "./base/BucketVaultSwapBase.sol";
 
 /**
  * @title ActiveBucket
@@ -21,7 +22,7 @@ import {BucketVaultBase} from "./base/BucketVaultBase.sol";
  * valuation and oracle-consumption logic from {BucketVaultBase}; state variables stay declared
  * here.
  */
-contract ActiveBucket is BucketVaultBase {
+contract ActiveBucket is BucketVaultSwapBase {
     using SafeERC20 for IERC20;
 
     /*//////////////////////////////////////////////////////////////
@@ -113,10 +114,7 @@ contract ActiveBucket is BucketVaultBase {
      * @notice Initializes the ActiveBucket contract
      * @param bucketInfoAddr The BucketInfo contract address
      */
-    function initialize(address bucketInfoAddr, string memory name, string memory symbol)
-        external
-        initializer
-    {
+    function initialize(address bucketInfoAddr, string memory name, string memory symbol) external initializer {
         // Only a platform-authorized factory may initialize a proxy against this
         // implementation, preventing a direct `ERC1967Proxy` deploy from bypassing the factory
         // with an attacker-controlled `bucketInfoAddr`.
@@ -199,7 +197,11 @@ contract ActiveBucket is BucketVaultBase {
      * @param routerCalldata Caller-supplied 1inch calldata validated against these parameters.
      */
     function swapBy1inch(
-        address srcToken, address dstToken, uint256 amount, uint256 minReturn, bytes calldata routerCalldata
+        address srcToken,
+        address dstToken,
+        uint256 amount,
+        uint256 minReturn,
+        bytes calldata routerCalldata
     )
         external
         onlyOwner

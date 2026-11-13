@@ -34,7 +34,6 @@ contract VerifyPassiveBucket is Script {
         console.log("Symbol           :", pb.symbol());
         console.log("Owner            :", pb.owner());
         console.log("BucketInfo       :", address(pb.bucketInfo()));
-        console.log("1inch Router     :", pb.oneInchRouter());
         console.log("WETH             :", pb.weth());
         console.log("Paused           :", pb.paused());
         console.log("Swap Paused      :", pb.swapPaused());

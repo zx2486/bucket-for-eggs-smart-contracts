@@ -12,7 +12,6 @@ contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
     struct PassiveConfig {
         address bucketInfo;
         address registry;
-        address oneInchRouter;
         address weth;
         address dexRouter;
         address dexQuoter;
@@ -30,11 +29,9 @@ contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
         require(config.bucketInfo != address(0), "Set deployment.bucketInfoAddress in configs/sepolia.json");
         require(config.bucketInfo.code.length > 0, "BucketInfo has no code");
         require(config.registry != address(0), "Set deployment.implementationRegistryAddress in configs/sepolia.json");
-        require(config.oneInchRouter != address(0), "1inch router is zero");
         require(config.weth != address(0), "WETH is zero");
         require(config.dexRouter != address(0) && config.dexQuoter != address(0), "DEX router or quoter is zero");
         require(config.registry.code.length > 0, "ImplementationRegistry has no code");
-        require(config.oneInchRouter.code.length > 0, "1inch router has no code");
         require(
             config.dexRouter.code.length > 0 && config.dexQuoter.code.length > 0, "DEX router or quoter has no code"
         );
@@ -51,7 +48,7 @@ contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        PassiveBucket implementation = new PassiveBucket(config.registry, config.oneInchRouter);
+        PassiveBucket implementation = new PassiveBucket(config.registry);
         PassiveBucketFactory factory = new PassiveBucketFactory(address(implementation), config.bucketInfo);
 
         IImplementationRegistry registry = IImplementationRegistry(config.registry);
@@ -71,14 +68,12 @@ contract DeployPassiveBucketSepolia is SepoliaDeploymentConfig {
         console.log("Owner:", bucket.owner());
         console.log("BucketInfo:", address(bucket.bucketInfo()));
         console.log("ImplementationRegistry:", config.registry);
-        console.log("1inch router:", bucket.oneInchRouter());
         console.log("WETH:", bucket.weth());
     }
 
     function _loadPassiveConfig(string memory json) private pure returns (PassiveConfig memory config) {
         config.bucketInfo = _configuredAddress(json, ".deployment.bucketInfoAddress");
         config.registry = _configuredAddress(json, ".deployment.implementationRegistryAddress");
-        config.oneInchRouter = vm.parseJsonAddress(json, ".deployment.oneInchRouter");
         config.name = vm.parseJsonString(json, ".deployment.passiveBucket.name");
         config.symbol = vm.parseJsonString(json, ".deployment.passiveBucket.symbol");
         config.weth = vm.parseJsonAddress(json, ".deployment.passiveBucket.weth");

@@ -221,7 +221,7 @@ contract RedeemForStableTest is Test {
     }
 
     function _deployPassive() internal {
-        passiveImpl = new PassiveBucket(address(registry), address(router));
+        passiveImpl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 30);
@@ -243,7 +243,7 @@ contract RedeemForStableTest is Test {
     }
 
     function _deployFeeWithdrawalPassive() internal returns (PassiveBucket bucket) {
-        PassiveBucket implementation = new PassiveBucket(address(registry), address(router));
+        PassiveBucket implementation = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(stable), 50);

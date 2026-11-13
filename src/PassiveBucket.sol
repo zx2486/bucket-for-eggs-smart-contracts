@@ -16,7 +16,7 @@ import {FactoryAuthLib} from "./libraries/FactoryAuthLib.sol";
  * weight distributions. Users deposit tokens to receive shares and redeem shares to receive
  * proportional underlying tokens. Rebalancing aligns actual holdings with target distribution.
  * @dev Uses UUPS proxy pattern. Integrates with BucketInfo for token validation and pricing,
- * and with DEX routers (Uniswap V3 style + 1inch) for rebalancing. Inherits shared
+ *      and with whitelisted DEX routers for rebalancing. Inherits shared
  * deposit-accounting/value/oracle-consumption logic from {BucketVaultBase}; all state variables
  * below stay declared here, at their original linear slots. The Uniswap best-quote-and-swap
  * logic and the sell-to-WETH/buy-from-WETH trade-execution block used by `rebalanceByDefi` live
@@ -89,9 +89,6 @@ contract PassiveBucket is BucketVaultBase {
     /// itself must not be swappable by this vault's (customer) owner.
     IImplementationRegistry public immutable REGISTRY;
 
-    /// @notice Fixed 1inch aggregation router address for this implementation.
-    address public immutable ONEINCH_ROUTER;
-
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -124,7 +121,6 @@ contract PassiveBucket is BucketVaultBase {
     /// @dev Narrowed to zero-arg since `_verifyDistribution`'s tolerance check doesn't carry
     /// per-token detail into the revert.
     error DistributionMismatch();
-    error InvalidOneInchRouter();
     /// @dev Custom error in place of a `require(..., "string")` — same revert conditions, same
     /// call sites, smaller bytecode.
     error FeesExceed100Percent();
@@ -153,12 +149,9 @@ contract PassiveBucket is BucketVaultBase {
     /// @custom:oz-upgrades-unsafe-allow constructor
     /// @param registry_ The platform-owned {ImplementationRegistry} this vault checks upgrade
     /// implementations against. Set once at construction and never repointable.
-    /// @param router_ The platform-fixed 1inch router for this implementation.
-    constructor(address registry_, address router_) {
-        if (registry_ == address(0) || router_ == address(0)) revert ZeroAddress();
-        if (router_.code.length == 0) revert InvalidOneInchRouter();
+    constructor(address registry_) {
+        if (registry_ == address(0)) revert ZeroAddress();
         REGISTRY = IImplementationRegistry(registry_);
-        ONEINCH_ROUTER = router_;
         _disableInitializers();
     }
 
@@ -312,10 +305,6 @@ contract PassiveBucket is BucketVaultBase {
      */
     function rebalanceByDefi() external nonReentrant whenNotPaused whenSwapNotPaused whenPlatformOperational {
         _requireRebalanceCaller();
-        // rebalanceByDefi does not route through `_execute1inchSwap`, so it must enforce the
-        // shared per-caller/global swap cooldown itself.
-        _enforceSwapCooldown(msg.sender);
-
         uint256 totalValueBefore = _calculateTotalValue();
         uint256 beforeTokenPrice = tokenPrice;
 
@@ -370,55 +359,6 @@ contract PassiveBucket is BucketVaultBase {
         // Calculate new total value and settle fees / update token price
         uint256 totalValueAfter = _calculateTotalValue();
         _checkValueLossAndConsumeBudget(totalValueBefore, totalValueAfter);
-        _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
-    }
-
-    /**
-     * @notice Rebalance the portfolio via 1inch aggregation router
-     * @dev Callable by any shareholder. Caller-supplied router calldata is constrained by the
-     * shared 1inch calldata guard and value-loss limits. Fees: 6% of increase to owner, 3% to caller.
-     * @param srcToken Token being sold (address(0) = native ETH). Must be whitelisted.
-     * @param dstToken Token being bought (address(0) = native ETH). Must be whitelisted.
-     * @param amount Amount of `srcToken` to swap, bounded by this vault's held balance.
-     * @param minReturn Minimum acceptable `dstToken` out; must clear an oracle-derived floor.
-     * @param routerCalldata Caller-supplied 1inch route calldata, validated by the shared guard.
-     */
-    function rebalanceBy1inch(
-        address srcToken,
-        address dstToken,
-        uint256 amount,
-        uint256 minReturn,
-        bytes calldata routerCalldata
-    ) external nonReentrant whenNotPaused whenSwapNotPaused whenPlatformOperational {
-        _requireRebalanceCaller();
-
-        uint256 beforeTokenPrice = tokenPrice;
-        (uint256 totalValueBefore, uint256 totalValueAfter) =
-            _execute1inchSwap(srcToken, dstToken, amount, minReturn, routerCalldata);
-
-        _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
-    }
-
-    /**
-     * @notice Execute several 1inch swaps in one call (any holder), to rebalance the
-     * portfolio across multiple token pairs in a single transaction.
-     * @dev Each leg is independently validated and value-checked exactly as `rebalanceBy1inch`
-     * checks its single leg; only the swap cooldown is shared across all legs. Distribution
-     * tolerance is checked once, after all legs have settled.
-     * @param legs The ordered list of swaps to execute, one `rebalanceBy1inch`-style leg each.
-     */
-    function rebalanceMultiBy1inch(SwapLeg[] calldata legs)
-        external
-        nonReentrant
-        whenNotPaused
-        whenSwapNotPaused
-        whenPlatformOperational
-    {
-        _requireRebalanceCaller();
-
-        uint256 beforeTokenPrice = tokenPrice;
-        (uint256 totalValueBefore, uint256 totalValueAfter) = _executeMultiLegSwap(legs);
-
         _settleRebalance(totalValueBefore, totalValueAfter, beforeTokenPrice);
     }
 
@@ -578,7 +518,7 @@ contract PassiveBucket is BucketVaultBase {
                     INTERNAL: REBALANCE FEE HANDLING
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev `rebalanceByDefi` and `rebalanceBy1inch` both start with this exact guard.
+    /// @dev Rebalance requires shares and a non-blacklisted caller.
     function _requireHasShares() private view {
         if (balanceOf(msg.sender) == 0) revert InsufficientShares();
     }
@@ -606,7 +546,7 @@ contract PassiveBucket is BucketVaultBase {
         emit SwapPauseChanged(paused);
     }
 
-    /// @dev Shared entry guard for all three rebalance entry points: caller must hold shares
+    /// @dev Shared entry guard for rebalance: caller must hold shares
     /// and must not be blacklisted. Collapsed into one function (size relief, same conditions
     /// each call site checked separately before) since none of the three mint/burn on this
     /// path, so the transfer-time blacklist hook never fires and each must check explicitly.
@@ -708,19 +648,6 @@ contract PassiveBucket is BucketVaultBase {
 
     function _setBucketInfo(address newBucketInfo) internal override {
         bucketInfo = IBucketInfo(newBucketInfo);
-    }
-
-    function oneInchRouter() external view returns (address) {
-        return ONEINCH_ROUTER;
-    }
-
-    function _oneInchRouter() internal view override returns (address) {
-        return ONEINCH_ROUTER;
-    }
-
-    function _lossBoundsForCallerCalldata() internal view override returns (uint256 perCallBps, uint256 epochBps) {
-        if (msg.sender != owner()) return (MAX_VALUE_LOSS_BPS, EPOCH_VALUE_LOSS_BUDGET_BPS);
-        return (maxValueLossBps(), epochValueLossBudgetBps());
     }
 
     function _swapPaused() internal view override returns (bool) {

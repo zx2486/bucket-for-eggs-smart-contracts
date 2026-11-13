@@ -4,8 +4,11 @@ pragma solidity ^0.8.33;
 import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 import {ActiveBucket} from "../src/ActiveBucket.sol";
+import {ActiveBucketFactory} from "../src/ActiveBucketFactory.sol";
 import {PassiveBucket} from "../src/PassiveBucket.sol";
+import {PassiveBucketFactory} from "../src/PassiveBucketFactory.sol";
 import {IImplementationRegistry} from "../src/interfaces/IImplementationRegistry.sol";
+import {SepoliaDeploymentConfig} from "./SepoliaDeploymentConfig.sol";
 
 interface IUpgradeTarget {
     function owner() external view returns (address);
@@ -24,7 +27,7 @@ interface IUpgradeTarget {
     function redeemForStable(uint256, address, uint256) external;
 }
 
-contract UpgradeVaultsSepolia is Script {
+contract UpgradeVaultsSepolia is Script, SepoliaDeploymentConfig {
     uint256 private constant SEPOLIA_CHAIN_ID = 11155111;
     bytes32 private constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
@@ -38,14 +41,36 @@ contract UpgradeVaultsSepolia is Script {
                 "Set CONFIRM_SEPOLIA_VAULT_UPGRADE=YES to confirm"
             );
         }
-        address[] memory active = _targets("ACTIVE_BUCKET_PROXY_ADDRESS");
-        address[] memory passive = _targets("PASSIVE_BUCKET_PROXY_ADDRESS");
+        string memory vaultKind = vm.envString("UPGRADE_VAULT_KIND");
+        require(
+            _same(vaultKind, "active") || _same(vaultKind, "passive"), "UPGRADE_VAULT_KIND must be active or passive"
+        );
+        require(
+            _same(phase, "deploy-impl") || _same(phase, "deploy-factory") || _same(phase, "approve")
+                || _same(phase, "queue") || _same(phase, "execute") || _same(phase, "snapshot") || _same(phase, "check"),
+            "Unsupported upgrade phase"
+        );
+        bool activeOnly = _same(vaultKind, "active");
+        bool factoryPhase = _same(phase, "deploy-factory");
+        address[] memory active = activeOnly && !factoryPhase ? _targets("ACTIVE_BUCKET_PROXY_ADDRESS") : new address[](0);
+        address[] memory passive = !activeOnly && !factoryPhase ? _targets("PASSIVE_BUCKET_PROXY_ADDRESS") : new address[](0);
+        /* require(
+            bytes(vm.envOr(activeOnly ? "PASSIVE_BUCKET_PROXY_ADDRESS" : "ACTIVE_BUCKET_PROXY_ADDRESS", string("")))
+                .length == 0,
+            "Export proxy addresses for only the selected vault kind"
+        ); */
         uint256 privateKey = vm.envOr("PRIVATE_KEY", uint256(0));
         if (broadcasts) require(privateKey != 0, "Export PRIVATE_KEY in your shell");
         address signer = privateKey == 0 ? address(0) : vm.addr(privateKey);
-        require(active.length > 0 || passive.length > 0, "Export at least one vault target");
-        string memory json = vm.readFile("./configs/sepolia.json");
-        address router = vm.parseJsonAddress(json, ".deployment.oneInchRouter");
+        string memory json;
+        address router;
+        if (activeOnly && (_same(phase, "deploy-impl") || _same(phase, "check"))) {
+            json = vm.readFile("./configs/sepolia.json");
+            router = vm.parseJsonAddress(json, ".deployment.oneInchRouter");
+        }
+        if (_same(phase, "deploy-factory")) {
+            json = vm.readFile("./configs/sepolia.json");
+        }
 
         _preflight(active, signer, phase);
         _preflight(passive, signer, phase);
@@ -53,31 +78,62 @@ contract UpgradeVaultsSepolia is Script {
             _requireRegistryOwner(active, signer);
             _requireRegistryOwner(passive, signer);
         }
-        if (_same(phase, "deploy-impl")) {
+        if (_same(phase, "deploy-impl") && activeOnly) {
             require(router.code.length > 0, "Configured 1inch router has no code");
         }
-
         if (_same(phase, "deploy-impl")) {
-            _deploy(active, true, router, privateKey);
-            _deploy(passive, false, router, privateKey);
+            if (activeOnly) _deploy(active, true, router, privateKey);
+            else _deploy(passive, false, router, privateKey);
         } else if (_same(phase, "approve")) {
-            _approve(active, IImplementationRegistry.Kind.ActiveBucket, signer, privateKey);
-            _approve(passive, IImplementationRegistry.Kind.PassiveBucket, signer, privateKey);
+            if (activeOnly) _approve(active, IImplementationRegistry.Kind.ActiveBucket, signer, privateKey);
+            else _approve(passive, IImplementationRegistry.Kind.PassiveBucket, signer, privateKey);
         } else if (_same(phase, "queue")) {
-            _queue(active, "NEW_ACTIVE_IMPLEMENTATION", signer, privateKey);
-            _queue(passive, "NEW_PASSIVE_IMPLEMENTATION", signer, privateKey);
+            if (activeOnly) _queue(active, "NEW_ACTIVE_IMPLEMENTATION", signer, privateKey);
+            else _queue(passive, "NEW_PASSIVE_IMPLEMENTATION", signer, privateKey);
         } else if (_same(phase, "execute")) {
-            _execute(active, "NEW_ACTIVE_IMPLEMENTATION", signer, privateKey);
-            _execute(passive, "NEW_PASSIVE_IMPLEMENTATION", signer, privateKey);
+            if (activeOnly) _execute(active, "NEW_ACTIVE_IMPLEMENTATION", signer, privateKey);
+            else _execute(passive, "NEW_PASSIVE_IMPLEMENTATION", signer, privateKey);
         } else if (_same(phase, "snapshot")) {
             console.log(_snapshotJson(active, passive));
         } else if (_same(phase, "check")) {
             string memory snapshot = vm.envString("UPGRADE_SNAPSHOT_JSON");
-            _check(active, "NEW_ACTIVE_IMPLEMENTATION", router, snapshot, "active");
-            _check(passive, "NEW_PASSIVE_IMPLEMENTATION", router, snapshot, "passive");
+            if (activeOnly) _check(active, "NEW_ACTIVE_IMPLEMENTATION", router, snapshot, "active");
+            else _check(passive, "NEW_PASSIVE_IMPLEMENTATION", router, snapshot, "passive");
+        } else if (_same(phase, "deploy-factory")) {
+            _deployFactory(activeOnly, json, privateKey, signer);
         } else {
-            revert("UPGRADE_PHASE must be deploy-impl, approve, queue, execute, snapshot, or check");
+            revert("UPGRADE_PHASE must be deploy-impl, approve, queue, execute, snapshot, check, or deploy-factory");
         }
+    }
+
+    function _deployFactory(bool active, string memory json, uint256 privateKey, address signer) private {
+        address implementation = vm.envAddress(active ? "NEW_ACTIVE_IMPLEMENTATION" : "NEW_PASSIVE_IMPLEMENTATION");
+        address bucketInfo = _configuredAddress(json, ".deployment.bucketInfoAddress");
+        address registryAddress = _configuredAddress(json, ".deployment.implementationRegistryAddress");
+        require(implementation.code.length > 0, "New implementation has no code");
+        require(bucketInfo.code.length > 0, "Configured BucketInfo has no code");
+        require(registryAddress.code.length > 0, "Configured ImplementationRegistry has no code");
+        require(_implementationRegistry(implementation) == registryAddress, "Implementation registry mismatch");
+
+        IImplementationRegistry registry = IImplementationRegistry(registryAddress);
+        _requireRegistryOwner(registryAddress, signer);
+        IImplementationRegistry.Kind kind = active
+            ? IImplementationRegistry.Kind.ActiveBucket
+            : IImplementationRegistry.Kind.PassiveBucket;
+        require(registry.isApproved(kind, implementation), "Approve the implementation before deploying its factory");
+
+        vm.startBroadcast(privateKey);
+        address factory = active
+            ? address(new ActiveBucketFactory(implementation, bucketInfo))
+            : address(new PassiveBucketFactory(implementation, bucketInfo));
+        registry.setAuthorizedFactory(factory, true);
+        vm.stopBroadcast();
+
+        require(registry.isAuthorizedFactory(factory), "Factory authorization failed");
+        console.log(active ? "NEW_ACTIVE_FACTORY:" : "NEW_PASSIVE_FACTORY:", factory);
+        console.log("Implementation:", implementation);
+        console.log("BucketInfo:", bucketInfo);
+        console.log("ImplementationRegistry:", registryAddress);
     }
 
     function _preflight(address[] memory targets, address signer, string memory phase) private view {
@@ -116,7 +172,7 @@ contract UpgradeVaultsSepolia is Script {
         }
         vm.startBroadcast(privateKey);
         address implementation =
-            active ? address(new ActiveBucket(registry, router)) : address(new PassiveBucket(registry, router));
+            active ? address(new ActiveBucket(registry, router)) : address(new PassiveBucket(registry));
         vm.stopBroadcast();
         console.log(active ? "NEW_ACTIVE_IMPLEMENTATION:" : "NEW_PASSIVE_IMPLEMENTATION:", implementation);
     }
@@ -243,7 +299,9 @@ contract UpgradeVaultsSepolia is Script {
                 address(uint160(uint256(vm.load(targets[i], IMPLEMENTATION_SLOT)))) == expected,
                 "Implementation slot mismatch"
             );
-            require(vault.oneInchRouter() == router, "1inch router mismatch");
+            if (_same(kind, "active")) {
+                require(vault.oneInchRouter() == router, "1inch router mismatch");
+            }
             require(vault.pendingImplementation() == address(0), "Upgrade remains pending");
             string memory snapshotPath = string.concat(".", kind, ".", vm.toString(targets[i]));
             bytes32 expectedSnapshot = vm.parseJsonBytes32(snapshot, snapshotPath);
@@ -336,8 +394,8 @@ contract UpgradeVaultsSepolia is Script {
     }
 
     function _isWritePhase(string memory phase) private pure returns (bool) {
-        return
-            _same(phase, "deploy-impl") || _same(phase, "approve") || _same(phase, "queue") || _same(phase, "execute");
+        return _same(phase, "deploy-impl") || _same(phase, "deploy-factory") || _same(phase, "approve")
+            || _same(phase, "queue") || _same(phase, "execute");
     }
 
     function _same(string memory left, string memory right) private pure returns (bool) {

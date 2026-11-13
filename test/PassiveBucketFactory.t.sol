@@ -137,7 +137,6 @@ contract PassiveBucketFactoryTest is Test {
     address public deployer;
     address public alice;
     address public bob;
-    address public mockOneInch;
 
     uint256 constant ETH_PRICE = 2000e8;
     uint256 constant TOKEN_A_PRICE = 2000e8;
@@ -168,7 +167,6 @@ contract PassiveBucketFactoryTest is Test {
         deployer = address(this);
         alice = makeAddr("alice");
         bob = makeAddr("bob");
-        mockOneInch = address(this);
 
         bucketInfo = new MockBucketInfoForPBFactory();
         tokenA = new MockERC20ForPBFactory("Token A", "TKA", 18);
@@ -179,7 +177,7 @@ contract PassiveBucketFactoryTest is Test {
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         registry = new ImplementationRegistry(deployer);
-        implementation = new PassiveBucket(address(registry), address(this));
+        implementation = new PassiveBucket(address(registry));
         factory = new PassiveBucketFactory(address(implementation), address(bucketInfo));
         registry.setAuthorizedFactory(address(factory), true);
     }
@@ -246,12 +244,6 @@ contract PassiveBucketFactoryTest is Test {
         assertEq(address(PassiveBucket(payable(proxy)).bucketInfo()), factory.bucketInfo());
     }
 
-    function test_Create_OneInchRouterIsSet() public {
-        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(dists, NAME, SYMBOL);
-        assertEq(PassiveBucket(payable(proxy)).oneInchRouter(), mockOneInch);
-    }
-
     function test_Create_ERC20NameAndSymbol() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
         address proxy = factory.createPassiveBucket(dists, NAME, SYMBOL);
@@ -276,13 +268,6 @@ contract PassiveBucketFactoryTest is Test {
     }
 
     function test_Create_ZeroBucketInfoReverts_SUPERSEDED_seeConstructorTest() public {}
-
-    function test_Create_OneInchRouterIsImplementationImmutable() public {
-        PassiveBucket.BucketDistribution[] memory dists = _defaultDists();
-        address proxy = factory.createPassiveBucket(dists, NAME, SYMBOL);
-        assertEq(PassiveBucket(payable(proxy)).oneInchRouter(), address(this));
-        assertEq(implementation.ONEINCH_ROUTER(), address(this));
-    }
 
     function test_Create_EmitsEvent() public {
         PassiveBucket.BucketDistribution[] memory dists = _defaultDists();

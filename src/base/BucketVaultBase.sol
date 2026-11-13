@@ -24,7 +24,6 @@ import {GovernanceLib} from "../libraries/GovernanceLib.sol";
 import {OraclePricingLib} from "../libraries/OraclePricingLib.sol";
 import {PayoutLib} from "../libraries/PayoutLib.sol";
 import {SwapExecutionLib} from "../libraries/SwapExecutionLib.sol";
-import {OneInchCalldataLib} from "../libraries/OneInchCalldataLib.sol";
 
 /// @title Shared base for active and passive vaults.
 abstract contract BucketVaultBase is
@@ -42,8 +41,9 @@ abstract contract BucketVaultBase is
     /// @custom:storage-location erc7201:bucket-for-eggs.storage.BucketVaultBase
     struct BucketVaultBaseStorage {
         EnumerableSet.AddressSet heldTokens;
-        /// Swap cooldown and per-epoch value-loss state.
+        /// Reserved swap cooldown state retained for proxy storage-layout compatibility.
         SwapExecutionLib.SwapCooldownState swapCooldown;
+        /// Per-epoch value-loss state.
         SwapExecutionLib.EpochLossBudget epochLossBudget;
         /// Pending BucketInfo address update.
         TimelockedAdmin.AddressTimelock bucketInfoUpdateTimelock;
@@ -60,7 +60,7 @@ abstract contract BucketVaultBase is
     bytes32 private constant BucketVaultBaseStorageLocation =
         0x9f30ad90d3ca0770ef0f83f64df7579794e50d1de913b949a234fef0170b6e00;
 
-    function _getBucketVaultBaseStorage() private pure returns (BucketVaultBaseStorage storage $) {
+    function _getBucketVaultBaseStorage() internal pure returns (BucketVaultBaseStorage storage $) {
         assembly {
             $.slot := BucketVaultBaseStorageLocation
         }
@@ -94,9 +94,6 @@ abstract contract BucketVaultBase is
     uint256 public constant MAX_LOCAL_PLATFORM_FEE_BPS = 1000;
 
     /// @dev Minimum time between swap actions by the same caller.
-    uint256 public constant CALLER_SWAP_COOLDOWN = 5 minutes;
-    /// @dev Minimum time between any two swap actions.
-    uint256 public constant GLOBAL_SWAP_COOLDOWN = 1 minutes;
     /// @dev Rolling period for the cumulative value-loss budget.
     uint256 public constant VALUE_LOSS_EPOCH_LENGTH = 1 days;
     /// @dev Default cumulative value-loss budget per epoch, in basis points.
@@ -124,10 +121,7 @@ abstract contract BucketVaultBase is
     error SameToken();
     error AmountExceedsHeldBalance(uint256 amount, uint256 heldBalance);
     error MinReturnBelowFloor(uint256 minReturnValueUsd, uint256 floorValueUsd);
-    error SwapCooldownActive(uint256 cooldownUntil);
     error EpochValueLossBudgetExceeded(uint256 projectedLossUsd, uint256 budgetUsd);
-    error MalformedSwapPayload();
-    error EmptyLegs();
     error UpgradeImplementationMismatch(address expected, address provided);
     error UpgradeNotApproved(address implementation);
     error RenounceOwnershipDisabled();
@@ -172,9 +166,6 @@ abstract contract BucketVaultBase is
 
     /// @dev Set this vault's BucketInfo contract.
     function _setBucketInfo(address newBucketInfo) internal virtual;
-
-    /// @dev Return this vault's 1inch router.
-    function _oneInchRouter() internal view virtual returns (address);
 
     /// @dev Return whether swaps are paused.
     function _swapPaused() internal view virtual returns (bool);
@@ -570,79 +561,7 @@ abstract contract BucketVaultBase is
         return _calculateTotalValue();
     }
 
-    /// @dev Selector for the typed 1inch swap function.
-    // casting to 'bytes4' is safe because this is the standard 4-byte function-selector
-    // derivation (truncating a keccak256 hash to its first 4 bytes), not a value reinterpretation.
-    /// @dev Execute a validated caller-calldata 1inch swap.
-    function _execute1inchSwap(
-        address srcToken,
-        address dstToken,
-        uint256 amount,
-        uint256 minReturn,
-        bytes calldata routerCalldata
-    ) internal returns (uint256 totalValueBefore, uint256 totalValueAfter) {
-        _validateSwapLeg(srcToken, dstToken, amount, minReturn);
-        _enforceSwapCooldown(msg.sender);
-        return _executeSwapWithCalldataNoCooldown(srcToken, dstToken, amount, minReturn, routerCalldata);
-    }
-
-    /// @dev One leg of a multi-leg swap: see `_executeMultiLegSwap`.
-    struct SwapLeg {
-        address srcToken;
-        address dstToken;
-        uint256 amount;
-        uint256 minReturn;
-        bytes routerCalldata;
-    }
-
-    /// @dev Execute several caller-calldata swap legs under one cooldown charge.
-    function _executeMultiLegSwap(SwapLeg[] calldata legs)
-        internal
-        returns (uint256 totalValueBefore, uint256 totalValueAfter)
-    {
-        if (legs.length == 0) revert EmptyLegs();
-
-        _enforceSwapCooldown(msg.sender);
-        totalValueBefore = _calculateTotalValue();
-        for (uint256 i; i < legs.length; ++i) {
-            SwapLeg calldata leg = legs[i];
-            _validateSwapLeg(leg.srcToken, leg.dstToken, leg.amount, leg.minReturn);
-            _executeSwapWithCalldataNoCooldown(
-                leg.srcToken, leg.dstToken, leg.amount, leg.minReturn, leg.routerCalldata
-            );
-        }
-        totalValueAfter = _calculateTotalValue();
-    }
-
-    /// @dev Validate a swap leg before charging the cooldown.
-    function _validateSwapLeg(address srcToken, address dstToken, uint256 amount, uint256 minReturn) internal view {
-        SwapExecutionLib.validateSwapLeg(_bucketInfo(), srcToken, dstToken, amount, minReturn);
-    }
-
-    /// @dev Execute caller-supplied calldata and enforce value-loss limits.
-    function _executeSwapWithCalldataNoCooldown(
-        address srcToken,
-        address dstToken,
-        uint256 amount,
-        uint256 minReturn,
-        bytes calldata routerCalldata
-    ) internal returns (uint256 totalValueBefore, uint256 totalValueAfter) {
-        totalValueBefore = _calculateTotalValue();
-        address[] memory protectedTokens = _getBucketVaultBaseStorage().heldTokens.values();
-        OneInchCalldataLib.SwapRequest memory request = OneInchCalldataLib.SwapRequest({
-            router: _oneInchRouter(),
-            srcToken: srcToken,
-            dstToken: dstToken,
-            amount: amount,
-            minReturn: minReturn,
-            routerCalldata: routerCalldata
-        });
-        OneInchCalldataLib.executeSwap(_bucketInfo(), protectedTokens, request);
-        totalValueAfter = _calculateTotalValue();
-        _checkCallerCalldataValueLossAndConsumeBudget(totalValueBefore, totalValueAfter);
-    }
-
-    /// @dev Enforce the per-swap and cumulative loss limits.
+    /// @dev Enforce the per-swap and cumulative loss limits for typed DEX rebalancing.
     function _checkValueLossAndConsumeBudget(uint256 totalValueBefore, uint256 totalValueAfter) internal {
         SwapExecutionLib.checkValueLossAndConsumeBudget(
             _getBucketVaultBaseStorage().epochLossBudget,
@@ -651,17 +570,6 @@ abstract contract BucketVaultBase is
             maxValueLossBps(),
             epochValueLossBudgetBps()
         );
-    }
-
-    function _checkCallerCalldataValueLossAndConsumeBudget(uint256 totalValueBefore, uint256 totalValueAfter) private {
-        (uint256 perCallBps, uint256 epochBps) = _lossBoundsForCallerCalldata();
-        SwapExecutionLib.checkValueLossAndConsumeBudget(
-            _getBucketVaultBaseStorage().epochLossBudget, totalValueBefore, totalValueAfter, perCallBps, epochBps
-        );
-    }
-
-    function _lossBoundsForCallerCalldata() internal view virtual returns (uint256 perCallBps, uint256 epochBps) {
-        return (maxValueLossBps(), epochValueLossBudgetBps());
     }
 
     /// @notice Set per-swap and per-epoch value-loss limits.
@@ -684,12 +592,6 @@ abstract contract BucketVaultBase is
     function epochValueLossBudgetBps() public view returns (uint256) {
         uint256 bps = _getBucketVaultBaseStorage().maxValueLossBps.epochBudgetBps;
         return bps == 0 ? EPOCH_VALUE_LOSS_BUDGET_BPS : bps;
-    }
-
-    /// @dev Enforce caller and global swap cooldowns.
-    function _enforceSwapCooldown(address caller) internal {
-        BucketVaultBaseStorage storage $ = _getBucketVaultBaseStorage();
-        SwapExecutionLib.enforceSwapCooldown($.swapCooldown, caller);
     }
 
     /// @dev Add a token to the held set if its balance is positive.

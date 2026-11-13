@@ -29,9 +29,8 @@ contract W1_7GateActiveBucketTest is Test {
     }
 
     function test_RevertDirectProxyBypass_UnauthorizedCaller() public {
-        bytes memory initData = abi.encodeWithSelector(
-            ActiveBucket.initialize.selector, bucketInfoStandIn, "Evil Bucket", "EVIL"
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(ActiveBucket.initialize.selector, bucketInfoStandIn, "Evil Bucket", "EVIL");
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
         new ERC1967Proxy(address(implementation), initData);
     }
@@ -69,7 +68,7 @@ contract W1_7GatePassiveBucketTest is Test {
 
     function setUp() public {
         registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry), address(this));
+        implementation = new PassiveBucket(address(registry));
         bucketInfoStandIn = makeAddr("passiveBucketInfoStandIn");
         oneInchRouterStandIn = makeAddr("passiveOneInchRouterStandIn");
 
@@ -86,9 +85,8 @@ contract W1_7GatePassiveBucketTest is Test {
 
     function test_RevertDirectProxyBypass_UnauthorizedCaller() public {
         PassiveBucket.BucketDistribution[] memory dists = _singleTokenDistributions();
-        bytes memory initData = abi.encodeWithSelector(
-            PassiveBucket.initialize.selector, bucketInfoStandIn, dists, "Evil Bucket", "EVIL"
-        );
+        bytes memory initData =
+            abi.encodeWithSelector(PassiveBucket.initialize.selector, bucketInfoStandIn, dists, "Evil Bucket", "EVIL");
         vm.expectRevert(BucketVaultBase.UnauthorizedInitializer.selector);
         new ERC1967Proxy(address(implementation), initData);
     }
@@ -110,7 +108,6 @@ contract W1_7GatePassiveBucketTest is Test {
 
         assertEq(bucket.owner(), address(this));
         assertEq(address(bucket.bucketInfo()), address(bucketInfo));
-        assertEq(bucket.oneInchRouter(), address(this));
     }
 }
 

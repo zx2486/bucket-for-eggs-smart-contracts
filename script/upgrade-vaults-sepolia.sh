@@ -13,9 +13,22 @@ fi
 
 : "${SEPOLIA_RPC_URL:?Export SEPOLIA_RPC_URL in your shell}"
 : "${UPGRADE_PHASE:?Export UPGRADE_PHASE in your shell}"
+: "${UPGRADE_VAULT_KIND:?Export UPGRADE_VAULT_KIND=active or passive in your shell}"
+if [[ "$UPGRADE_VAULT_KIND" != "active" && "$UPGRADE_VAULT_KIND" != "passive" ]]; then
+    echo "UPGRADE_VAULT_KIND must be active or passive." >&2
+    exit 2
+fi
 
-args=(script script/UpgradeVaultsSepolia.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier "${SEPOLIA_UPGRADE_GAS_MULTIPLIER:-400}" -vvv)
-if [[ "${UPGRADE_PHASE:-}" == "check" || "${UPGRADE_PHASE:-}" == "snapshot" ]]; then
+args=(script script/UpgradeVaultsSepolia.s.sol --rpc-url "$SEPOLIA_RPC_URL" --gas-estimate-multiplier "${SEPOLIA_UPGRADE_GAS_MULTIPLIER:-800}" -vvv)
+if [[ "${UPGRADE_PHASE:-}" == "deploy-factory" ]]; then
+    if [[ "$UPGRADE_VAULT_KIND" == "active" ]]; then
+        : "${NEW_ACTIVE_IMPLEMENTATION:?Export NEW_ACTIVE_IMPLEMENTATION for an active factory}"
+    else
+        : "${NEW_PASSIVE_IMPLEMENTATION:?Export NEW_PASSIVE_IMPLEMENTATION for a passive factory}"
+    fi
+    : "${PRIVATE_KEY:?Export PRIVATE_KEY in your shell for factory deployment}"
+    args+=(--private-key "$PRIVATE_KEY")
+elif [[ "${UPGRADE_PHASE:-}" == "check" || "${UPGRADE_PHASE:-}" == "snapshot" ]]; then
     if [[ -n "${UPGRADE_SCRIPT_SENDER:-}" ]]; then
         args+=(--sender "$UPGRADE_SCRIPT_SENDER")
     fi

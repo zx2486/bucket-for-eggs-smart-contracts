@@ -118,6 +118,23 @@ All `deploy-*` shell scripts and Foundry deployment scripts broadcast transactio
 
 The example config specifies a PassiveBucket allocation of **75% WBTC / 25% ETH**, ActiveBucket's **13% performance fee**, PureMembership tiers of **$10/30 days**, **$50/30 days**, and **$300/365 days**, and a PotentialRugpull **10% cash ratio**. These are configuration values, not validation that the assets or feeds are available or liquid.
 
+### Deploying RedeemForStable
+
+The deployment script reads `BucketInfo`, WETH, the Uniswap V3 router/quoter, fee, and stablecoin addresses from `configs/sepolia.json`. It validates that the configured contracts have code. Set `PRIVATE_KEY` and `SEPOLIA_RPC_URL` in the shell environment; the wrapper does not read `.env` and simulates by default.
+
+```sh
+script/deploy-redeem-for-stable-sepolia.sh
+```
+
+Review the simulation output, then explicitly authorize a Sepolia broadcast:
+
+```sh
+export CONFIRM_SEPOLIA_REDEEM_FOR_STABLE_DEPLOY=YES
+script/deploy-redeem-for-stable-sepolia.sh --broadcast
+```
+
+Record the emitted address in the deployment address book. This deploys the standalone redeemer only; it does not change vaults or configure stable-token whitelisting in `BucketInfo`.
+
 ## Verification and operations
 
 The `verify-activebucket-sepolia.sh`, `verify-passivebucket-sepolia.sh`, and `verify-puremembership-sepolia.sh` scripts verify implementations and factories where supplied, then read proxy state. `verify-bucketinfo-sepolia.sh` checks BucketInfo on-chain and can submit source verification. These scripts are read-oriented except for Etherscan verification submissions.
@@ -128,20 +145,21 @@ Use a dedicated Sepolia test wallet via `SMOKE_PRIVATE_KEY`; do not use the plat
 
 ## Upgrading existing Sepolia vaults
 
-Use `script/upgrade-vaults-sepolia.sh` to upgrade existing ActiveBucket and PassiveBucket proxies through the registry approval and 48-hour timelock. Run each phase separately; the script is Sepolia-only and checks the targets, signer role, registry, implementation, pending queue, and timelock. It does not source `.env`. Export the required variables in your shell, and never put secret values in command history or documentation.
+Use `script/upgrade-vaults-sepolia.sh` to upgrade ActiveBucket or PassiveBucket proxies through the registry approval and 48-hour timelock. Each run selects exactly one vault kind with `UPGRADE_VAULT_KIND=active` or `passive`; run every phase separately for each kind. The Sepolia-only script checks the targets, signer role, registry, implementation, pending queue, and timelock. It does not source `.env`. Export the required variables in your shell, and never put secret values in command history or documentation.
 
-Before starting, confirm the deployed vault implementations' source commit and have the storage-layout comparison reviewed. Confirm the proxy addresses from the authoritative deployment records; do not infer them from `.env`, `broadcast/`, or `configs/sepolia.json`. Export at least one proxy address of each kind; comma-separate multiple addresses. Each write phase requires a key that has the required role for every target in that phase.
+Before starting, confirm the deployed vault implementations' source commit and have the storage-layout comparison reviewed. Confirm proxy addresses from authoritative deployment records; do not infer them from `.env`, `broadcast/`, or `configs/sepolia.json`. Export proxy addresses for only the selected kind; comma-separate multiple addresses. Each write phase requires a key that has the required role for every target in that phase.
 
 ```sh
 export SEPOLIA_RPC_URL='<Sepolia RPC URL>'
+export UPGRADE_VAULT_KIND=active # or passive
 export ACTIVE_BUCKET_PROXY_ADDRESS='<ActiveBucket proxy>[,<another ActiveBucket proxy>]'
-export PASSIVE_BUCKET_PROXY_ADDRESS='<PassiveBucket proxy>[,<another PassiveBucket proxy>]'
+# For a passive run, set PASSIVE_BUCKET_PROXY_ADDRESS instead.
 ```
 
-First run the read-only snapshot phase and save the JSON object it prints. Keep it unchanged for the final `check` phase; the check verifies that vault state is preserved across the upgrade. Foundry may query its default simulation sender during this read-only phase; if the RPC rejects that account lookup, set `UPGRADE_SCRIPT_SENDER` to a known on-chain account to override the simulation sender.
+First run the read-only snapshot phase for the selected vault kind and save the JSON object it prints. Keep it unchanged for the final `check` phase; the check verifies that vault state is preserved across the upgrade. Foundry may query its default simulation sender during this read-only phase; if the RPC rejects that account lookup, set `UPGRADE_SCRIPT_SENDER` to a known on-chain account to override the simulation sender.
 
 ```sh
-UPGRADE_SCRIPT_SENDER=... UPGRADE_PHASE=snapshot bash script/upgrade-vaults-sepolia.sh
+UPGRADE_SCRIPT_SENDER=... UPGRADE_VAULT_KIND=passive UPGRADE_PHASE=snapshot bash script/upgrade-vaults-sepolia.sh
 ```
 
 Run these phases in order. The wrapper defaults to a dry run; inspect each simulation, then repeat each write phase with `--broadcast` only when the human operator has reviewed and approved the transactions. Broadcasting also requires `CONFIRM_SEPOLIA_VAULT_UPGRADE=YES`:
@@ -150,7 +168,7 @@ Run these phases in order. The wrapper defaults to a dry run; inspect each simul
 export CONFIRM_SEPOLIA_VAULT_UPGRADE=YES
 ```
 
-1. **Deploy implementations.** The deployer key is used to deploy both implementations; record the printed addresses. The wrapper uses `--gas-estimate-multiplier 400` by default for Sepolia contract creation; override it with `SEPOLIA_UPGRADE_GAS_MULTIPLIER` only if a measured estimate requires adjustment. Foundry may also emit `CREATE2` transactions to the standard deterministic deployment proxy while deploying Solidity libraries linked into the implementations. Existing ActiveBucket and PassiveBucket deployment scripts use the same mechanism; these are library deployments, not vault calls to an unrelated contract.
+1. **Deploy the selected implementation.** The deployer key deploys only the implementation matching `UPGRADE_VAULT_KIND`; record its printed address. The wrapper uses `--gas-estimate-multiplier 400` by default for Sepolia contract creation; override it with `SEPOLIA_UPGRADE_GAS_MULTIPLIER` only if a measured estimate requires adjustment. Foundry may also emit `CREATE2` transactions to the standard deterministic deployment proxy while deploying Solidity libraries linked into the implementation. These are library deployments, not vault calls to an unrelated contract.
 
    ```sh
    export PRIVATE_KEY='<deployer private key>'
@@ -161,8 +179,10 @@ export CONFIRM_SEPOLIA_VAULT_UPGRADE=YES
 2. **Approve implementations.** Set the new implementation addresses printed above. The key must own the `ImplementationRegistry` used by the target proxies.
 
    ```sh
+   # Active run:
    export NEW_ACTIVE_IMPLEMENTATION='<new ActiveBucket implementation>'
-   export NEW_PASSIVE_IMPLEMENTATION='<new PassiveBucket implementation>'
+   # Passive run:
+   # export NEW_PASSIVE_IMPLEMENTATION='<new PassiveBucket implementation>'
    export PRIVATE_KEY='<ImplementationRegistry owner private key>'
    UPGRADE_PHASE=approve bash script/upgrade-vaults-sepolia.sh
    UPGRADE_PHASE=approve bash script/upgrade-vaults-sepolia.sh --broadcast
@@ -191,6 +211,18 @@ export CONFIRM_SEPOLIA_VAULT_UPGRADE=YES
    ```
 
 The `--broadcast` commands submit real Sepolia transactions and spend gas; only a human should run them. Do not use a target whose deployed implementation lacks the 48-hour upgrade queue—the script intentionally stops instead of bypassing the timelock. Existing factories retain their immutable old implementations, so newly created vaults require separately deployed and configured factories.
+
+To deploy and authorize a replacement factory after the corresponding implementation has been deployed and approved, reuse `UPGRADE_PHASE=deploy-factory`. It uses `NEW_ACTIVE_IMPLEMENTATION` or `NEW_PASSIVE_IMPLEMENTATION` according to `UPGRADE_VAULT_KIND`, and takes the canonical `BucketInfo` and registry addresses from `configs/sepolia.json`. The signer must own the registry. It deploys the factory, authorizes it in the registry, and prints the new factory address. The default is simulation only; broadcast only after reviewing the simulation:
+
+```sh
+export UPGRADE_VAULT_KIND=active # or passive
+export NEW_ACTIVE_IMPLEMENTATION='<approved implementation>' # or NEW_PASSIVE_IMPLEMENTATION for passive
+export PRIVATE_KEY='<ImplementationRegistry owner private key>'
+UPGRADE_PHASE=deploy-factory bash script/upgrade-vaults-sepolia.sh
+UPGRADE_PHASE=deploy-factory bash script/upgrade-vaults-sepolia.sh --broadcast
+```
+
+Record the printed `NEW_ACTIVE_FACTORY` / `NEW_PASSIVE_FACTORY` address in the authoritative deployment address book and update consumers to use it. This phase does not create a sample vault.
 
 `DeployMockTokens.s.sol` and `deploy-mock-tokens-sepolia.sh` are for development/test fixtures only. Mock assets are not production tokens; update configuration and validate feeds deliberately if using them.
 

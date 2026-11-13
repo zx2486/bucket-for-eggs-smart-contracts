@@ -174,7 +174,6 @@ contract PassiveBucketTest is Test {
     MockBucketInfoForPassive public bucketInfo;
     MockERC20 public tokenA; // 18 decimals (like WETH)
     MockERC20 public tokenB; // 6 decimals (like USDT)
-    MockOneInchRouter public oneInchRouter;
     ImplementationRegistry public registry;
 
     address public owner;
@@ -202,14 +201,13 @@ contract PassiveBucketTest is Test {
         bucketInfo = new MockBucketInfoForPassive();
         tokenA = new MockERC20("Token A", "TKA", 18);
         tokenB = new MockERC20("Token B", "TKB", 6);
-        oneInchRouter = new MockOneInchRouter();
 
         bucketInfo.addToken(address(0), ETH_PRICE);
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         registry = new ImplementationRegistry(owner);
-        implementation = new PassiveBucket(address(registry), address(oneInchRouter));
+        implementation = new PassiveBucket(address(registry));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -241,7 +239,6 @@ contract PassiveBucketTest is Test {
         assertEq(bucket.symbol(), "pBKT");
         assertEq(bucket.owner(), owner);
         assertEq(address(bucket.bucketInfo()), address(bucketInfo));
-        assertEq(bucket.oneInchRouter(), address(oneInchRouter));
         assertEq(bucket.tokenPrice(), 0);
         assertFalse(bucket.swapPaused());
         assertEq(bucket.totalDepositValue(), 0);
@@ -260,7 +257,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeZeroAddress() public {
-        PassiveBucket impl = new PassiveBucket(address(registry), address(this));
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](1);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 100);
 
@@ -272,7 +269,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeInvalidWeights() public {
-        PassiveBucket impl = new PassiveBucket(address(registry), address(this));
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(tokenA), 40);
@@ -285,7 +282,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeDuplicateTokens() public {
-        PassiveBucket impl = new PassiveBucket(address(registry), address(this));
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 50);
         dists[1] = PassiveBucket.BucketDistribution(address(0), 50);
@@ -298,7 +295,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertInitializeEmptyDistributions() public {
-        PassiveBucket impl = new PassiveBucket(address(registry), address(this));
+        PassiveBucket impl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](0);
 
         bytes memory initData = abi.encodeWithSelector(
@@ -796,35 +793,6 @@ contract PassiveBucketTest is Test {
         bucket.configureDEX(0, makeAddr("router"), makeAddr("quoter"), 3000, true);
     }
 
-    function test_RevertRebalanceBy1inchNoShares() public {
-        vm.prank(user1);
-        vm.expectRevert(BucketVaultBase.InsufficientShares.selector);
-        bucket.rebalanceBy1inch(address(0), address(0), 1, 0, bytes(""));
-    }
-
-    function test_RevertRebalanceBy1inchSwapPaused() public {
-        vm.prank(user1);
-        bucket.deposit{value: 1 ether}(address(0), 0);
-        bucket.deposit{value: 10 ether}(address(0), 0); // owner for accountability
-
-        bucket.pauseSwap();
-
-        vm.prank(user1);
-        vm.expectRevert(BucketVaultBase.SwapIsPaused.selector);
-        bucket.rebalanceBy1inch(address(0), address(0), 1, 0, bytes(""));
-    }
-
-    function test_RevertRebalanceBy1inchPlatformPaused() public {
-        vm.prank(user1);
-        bucket.deposit{value: 1 ether}(address(0), 0);
-
-        bucketInfo.setOperational(false);
-
-        vm.prank(user1);
-        vm.expectRevert(BucketVaultBase.PlatformNotOperational.selector);
-        bucket.rebalanceBy1inch(address(0), address(0), 1, 0, bytes(""));
-    }
-
     function test_RevertRebalanceByDefiSwapPaused() public {
         vm.prank(user1);
         bucket.deposit{value: 1 ether}(address(0), 0);
@@ -1109,7 +1077,7 @@ contract PassiveBucketTest is Test {
     }
 
     function _deployApprovedPassiveBucketImplementation() internal returns (address newImpl) {
-        newImpl = address(new PassiveBucket(address(registry), address(this)));
+        newImpl = address(new PassiveBucket(address(registry)));
         registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
     }
 
@@ -1189,7 +1157,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertUpgrade_NeverApproved() public {
-        address newImpl = address(new PassiveBucket(address(registry), address(this)));
+        address newImpl = address(new PassiveBucket(address(registry)));
 
         bucket.queueUpgrade(newImpl);
         vm.warp(block.timestamp + bucket.UPGRADE_TIMELOCK_DELAY());
@@ -1269,7 +1237,7 @@ contract PassiveBucketTest is Test {
         PassiveBucket customerBucket = PassiveBucket(payable(address(customerProxy)));
         assertEq(customerBucket.owner(), user2, "customerBucket must be owned by the customer, not the platform");
 
-        address newImpl = address(new PassiveBucket(address(registry), address(this)));
+        address newImpl = address(new PassiveBucket(address(registry)));
         registry.approve(IImplementationRegistry.Kind.PassiveBucket, newImpl);
 
         vm.expectRevert();
@@ -1284,7 +1252,7 @@ contract PassiveBucketTest is Test {
     }
 
     function test_RevertUpgrade_ApprovedForWrongKind() public {
-        address newImpl = address(new PassiveBucket(address(registry), address(this)));
+        address newImpl = address(new PassiveBucket(address(registry)));
         registry.approve(IImplementationRegistry.Kind.ActiveBucket, newImpl);
 
         bucket.queueUpgrade(newImpl);

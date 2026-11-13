@@ -39,7 +39,6 @@ contract W0CharacterisationPassiveBucketTest is Test {
     MockBucketInfoForPassive public bucketInfo;
     MockERC20 public tokenA; // 18 decimals
     MockERC20 public tokenB; // 6 decimals
-    MockOneInchRouter public oneInchRouter;
 
     address public user1;
 
@@ -53,14 +52,13 @@ contract W0CharacterisationPassiveBucketTest is Test {
         bucketInfo = new MockBucketInfoForPassive();
         tokenA = new MockERC20("Token A", "TKA", 18);
         tokenB = new MockERC20("Token B", "TKB", 6);
-        oneInchRouter = new MockOneInchRouter();
 
         bucketInfo.addToken(address(0), ETH_PRICE);
         bucketInfo.addToken(address(tokenA), TOKEN_A_PRICE);
         bucketInfo.addToken(address(tokenB), TOKEN_B_PRICE);
 
         ImplementationRegistry registry = new ImplementationRegistry(address(this));
-        implementation = new PassiveBucket(address(registry), address(this));
+        implementation = new PassiveBucket(address(registry));
         registry.setAuthorizedFactory(address(this), true);
 
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](3);
@@ -81,30 +79,6 @@ contract W0CharacterisationPassiveBucketTest is Test {
         vm.deal(user1, 100 ether);
         tokenA.mint(user1, 100e18);
         tokenB.mint(user1, 100000e6);
-    }
-
-    function test_CharacterisationRebalanceBy1inchForwardsArbitraryCalldataUnvalidated() public {
-        vm.startPrank(user1);
-        bucket.deposit{value: 0.25 ether}(address(0), 0); // $500 @ $2000/ETH -> 50%
-        tokenA.approve(address(bucket), 0.15e18);
-        bucket.deposit(address(tokenA), 0.15e18); // $300 @ $2000/token -> 30%
-        tokenB.approve(address(bucket), 200e6);
-        bucket.deposit(address(tokenB), 200e6); // $200 @ $1/token -> 20%
-        vm.stopPrank();
-
-        assertGt(bucket.balanceOf(user1), 0);
-
-        vm.prank(user1);
-        vm.expectRevert(BucketVaultBase.SameToken.selector);
-        bucket.rebalanceBy1inch(address(0), address(0), 1, 0, bytes(""));
-    }
-
-    function test_CharacterisationImplementationRejectsRouterWithoutCode() public {
-        address plainEOA = makeAddr("plainEOAWithNoCode");
-        assertEq(plainEOA.code.length, 0);
-
-        vm.expectRevert(PassiveBucket.InvalidOneInchRouter.selector);
-        new PassiveBucket(address(new ImplementationRegistry(address(this))), plainEOA);
     }
 
     function test_CharacterisationUpdateBucketInfoGatedOnBucketInfoOwnerNotVaultOwner() public {

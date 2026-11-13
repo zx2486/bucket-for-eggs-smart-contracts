@@ -408,7 +408,7 @@ contract W5GateStableExitAtomicityTest is Test {
         // test contract itself must be an authorized "factory".
         registry.setAuthorizedFactory(address(this), true);
 
-        passiveImpl = new PassiveBucket(address(registry), address(this));
+        passiveImpl = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory dists = new PassiveBucket.BucketDistribution[](2);
         dists[0] = PassiveBucket.BucketDistribution(address(0), 1);
         dists[1] = PassiveBucket.BucketDistribution(address(stable), 99);

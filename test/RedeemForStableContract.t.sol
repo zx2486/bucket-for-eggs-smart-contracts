@@ -540,7 +540,7 @@ contract RedeemForStableContractTest is Test {
         ActiveBucket active =
             ActiveBucket(payable(address(new ERC1967Proxy(address(activeImplementation), activeInit))));
 
-        PassiveBucket passiveImplementation = new PassiveBucket(address(registry), address(router));
+        PassiveBucket passiveImplementation = new PassiveBucket(address(registry));
         PassiveBucket.BucketDistribution[] memory distributions = new PassiveBucket.BucketDistribution[](1);
         distributions[0] = PassiveBucket.BucketDistribution(address(stable), 100);
         bytes memory passiveInit = abi.encodeWithSelector(
